@@ -8,16 +8,16 @@
       <span v-if="m.type === 'message'" class="nick" :class="{ self: m.self }" :style="nickStyle(m)">&lt;{{ m.nick }}&gt;</span>
       <span v-else-if="m.type === 'action'" class="nick action" :class="{ self: m.self }" :style="nickStyle(m)">* {{ m.nick }}</span>
       <span v-else-if="m.type === 'notice'" class="nick" :class="{ self: m.self }" :style="nickStyle(m)">-{{ m.nick }}-</span>
-      <span v-else-if="m.type === 'join'" class="meta">→ {{ m.nick }} joined</span>
-      <span v-else-if="m.type === 'part'" class="meta">← {{ m.nick }} left{{ m.text ? ' (' + m.text + ')' : '' }}</span>
-      <span v-else-if="m.type === 'quit'" class="meta">⤫ {{ m.nick }} quit{{ m.text ? ' (' + m.text + ')' : '' }}</span>
-      <span v-else-if="m.type === 'kick'" class="meta">⚠ {{ m.kicked }} kicked by {{ m.nick }}{{ m.text ? ' (' + m.text + ')' : '' }}</span>
-      <span v-else-if="m.type === 'nick'" class="meta">{{ m.nick }} is now {{ m.newNick }}</span>
-      <span v-else-if="m.type === 'mode'" class="meta">mode by {{ m.nick }}:</span>
-      <span v-else-if="m.type === 'topic'" class="meta">topic by {{ m.nick }}:</span>
+      <span v-else-if="m.type === 'join'" class="meta">→ <NickRef :nick="m.nick" /> joined</span>
+      <span v-else-if="m.type === 'part'" class="meta">← <NickRef :nick="m.nick" /> left{{ m.text ? ' (' + m.text + ')' : '' }}</span>
+      <span v-else-if="m.type === 'quit'" class="meta">⤫ <NickRef :nick="m.nick" /> quit{{ m.text ? ' (' + m.text + ')' : '' }}</span>
+      <span v-else-if="m.type === 'kick'" class="meta">⚠ <NickRef :nick="m.kicked" /> kicked by <NickRef :nick="m.nick" />{{ m.text ? ' (' + m.text + ')' : '' }}</span>
+      <span v-else-if="m.type === 'nick'" class="meta"><NickRef :nick="m.nick" /> is now <NickRef :nick="m.newNick" /></span>
+      <span v-else-if="m.type === 'mode'" class="meta">mode by <NickRef :nick="m.nick" />:</span>
+      <span v-else-if="m.type === 'topic'" class="meta">topic by <NickRef :nick="m.nick" />:</span>
       <span v-else-if="m.type === 'motd'" class="meta">[motd]</span>
       <span v-else-if="m.type === 'error'" class="meta error">[error]</span>
-      <span class="text">{{ m.text }}</span>
+      <span class="text"><template v-for="(seg, j) in textSegments(m)" :key="j"><span v-if="seg.color" :style="{ color: seg.color }">{{ seg.text }}</span><span v-else-if="seg.self" class="self-mention">{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></span>
     </div>
   </div>
 </template>
@@ -27,7 +27,8 @@ import { ref, computed, watch, nextTick } from 'vue';
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import { socketSend } from '../composables/useSocket.js';
-import { nickColor } from '../utils/nickColor.js';
+import { nickColor, splitTextByNicks } from '../utils/nickColor.js';
+import NickRef from './NickRef.vue';
 
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
@@ -37,6 +38,29 @@ const stickToBottom = ref(true);
 
 const buffer = computed(() => (networks.activeKey ? buffers.byKey(networks.activeKey) : null));
 const messages = computed(() => buffer.value?.messages || []);
+
+const selfLower = computed(() => {
+  const b = buffer.value;
+  const sn = b ? networks.states[b.networkId]?.nick : null;
+  return sn ? sn.toLowerCase() : null;
+});
+
+const nickSet = computed(() => {
+  const b = buffer.value;
+  const set = new Set();
+  if (!b) return set;
+  for (const mem of (b.members || [])) {
+    const n = typeof mem === 'string' ? mem : mem.nick;
+    if (n) set.add(n);
+  }
+  // For DM/query buffers (non-channel, non-server), the target itself is a nick.
+  if (b.target && !b.target.startsWith('#') && !b.target.startsWith(':server:')) {
+    set.add(b.target);
+  }
+  const sn = networks.states[b.networkId]?.nick;
+  if (sn) set.add(sn);
+  return set;
+});
 
 function time(iso) {
   if (!iso) return '';
@@ -57,6 +81,10 @@ function nickStyle(m) {
   if (m.self) return null;
   const c = nickColor(m.nick);
   return c ? { color: c } : null;
+}
+
+function textSegments(m) {
+  return splitTextByNicks(m.text || '', nickSet.value, selfLower.value);
 }
 
 function maybeRequestHistory() {
@@ -143,5 +171,6 @@ watch(() => networks.activeKey, async () => {
 .meta { color: var(--fg-muted); font-style: italic; }
 .meta.error { color: var(--bad); }
 .text { white-space: pre-wrap; word-break: break-word; }
+.text .self-mention { color: var(--fg); }
 .empty { color: var(--fg-muted); font-style: italic; padding: 8px 0; }
 </style>

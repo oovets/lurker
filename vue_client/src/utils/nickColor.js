@@ -62,3 +62,49 @@ export function nickColor(nick) {
   if (!normalized) return null;
   return NICK_COLOR_PALETTE[djb2(normalized) % NICK_COLOR_PALETTE.length];
 }
+
+// Chars that can appear inside an IRC nick (RFC 2812 plus the usual extensions).
+// A match against `nickSet` only counts when neither neighbour is one of these,
+// so "bob" inside "bobby" won't match.
+const NICK_CHAR_CLASS = '[A-Za-z0-9_\\-\\[\\]\\\\^{|}]';
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Split `text` into [{text, color?, self?}] segments, coloring any occurrence
+// of a nick from `nickSet`. Comparison is case-insensitive; the matched casing
+// is preserved in the rendered text.
+export function splitTextByNicks(text, nickSet, selfLower = null) {
+  if (!text) return [{ text: '' }];
+  if (!nickSet || nickSet.size === 0) return [{ text }];
+
+  const nicks = [...nickSet].filter(Boolean);
+  if (nicks.length === 0) return [{ text }];
+  // Longest first so "alibaba" wins over "ali" in alternation.
+  nicks.sort((a, b) => b.length - a.length);
+  const alternation = nicks.map(escapeRegex).join('|');
+  const pattern = new RegExp(
+    `(?<!${NICK_CHAR_CLASS})(?:${alternation})(?!${NICK_CHAR_CLASS})`,
+    'gi',
+  );
+
+  const out = [];
+  let lastIdx = 0;
+  let m;
+  while ((m = pattern.exec(text)) !== null) {
+    const matched = m[0];
+    const start = m.index;
+    if (start > lastIdx) out.push({ text: text.slice(lastIdx, start) });
+    const lower = matched.toLowerCase();
+    const isSelf = selfLower && lower === selfLower;
+    out.push({
+      text: matched,
+      color: isSelf ? null : nickColor(matched),
+      self: !!isSelf,
+    });
+    lastIdx = start + matched.length;
+  }
+  if (lastIdx < text.length) out.push({ text: text.slice(lastIdx) });
+  return out;
+}

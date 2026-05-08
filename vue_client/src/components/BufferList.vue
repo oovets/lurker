@@ -23,7 +23,7 @@
           @click="select(net.id, buf.target)"
         >
           <span class="bullet">{{ bulletFor(buf) }}</span>
-          <span class="label">{{ labelFor(buf) }}</span>
+          <span class="label" :style="labelStyle(buf)">{{ labelFor(buf) }}</span>
           <span v-if="buf.unread > 0" class="badge">{{ buf.unread }}</span>
           <button
             v-if="buf.target.startsWith('#')"
@@ -50,6 +50,7 @@ import { reactive } from 'vue';
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import { socketSend } from '../composables/useSocket.js';
+import { nickColor } from '../utils/nickColor.js';
 
 defineEmits(['edit-network']);
 
@@ -60,6 +61,18 @@ const joinInput = reactive({});
 
 function isServerBuffer(buf) {
   return buf.target.startsWith(':server:');
+}
+
+function isDmBuffer(buf) {
+  return !isServerBuffer(buf) && !buf.target.startsWith('#');
+}
+
+function labelStyle(buf) {
+  if (!isDmBuffer(buf)) return null;
+  const selfNick = networks.states[buf.networkId]?.nick;
+  if (selfNick && buf.target.toLowerCase() === selfNick.toLowerCase()) return null;
+  const c = nickColor(buf.target);
+  return c ? { color: c } : null;
 }
 
 function bulletFor(buf) {
@@ -139,7 +152,7 @@ function toggleNet(_) {
   letter-spacing: 0.05em;
 }
 .name { flex: 1; color: var(--fg); }
-.hostnick { color: var(--fg-muted); font-size: 11px; }
+.hostnick { color: var(--fg); font-size: 11px; }
 .indicator {
   width: 8px;
   height: 8px;
