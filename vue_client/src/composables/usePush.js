@@ -27,6 +27,10 @@ export async function registerSW() {
     .then(async () => {
       const reg = await navigator.serviceWorker.ready;
       navigator.serviceWorker.addEventListener('message', onSWMessage);
+      // Tell the server we're alive so last_seen_at reflects actual
+      // activity rather than the moment of last push delivery (which
+      // only fires when no client is visible — the opposite of "active").
+      heartbeat().catch(() => { /* ignore */ });
       return reg;
     })
     .catch((err) => {
@@ -35,6 +39,12 @@ export async function registerSW() {
       return null;
     });
   return registrationPromise;
+}
+
+async function heartbeat() {
+  const endpoint = await getCurrentEndpoint();
+  if (!endpoint) return;
+  await api('/api/push/heartbeat', { method: 'POST', body: { endpoint } });
 }
 
 function onSWMessage(event) {

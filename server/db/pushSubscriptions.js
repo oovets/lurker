@@ -39,16 +39,32 @@ export function upsertSubscription(userId, { endpoint, p256dh, auth, userAgent }
     db.prepare(`
       UPDATE push_subscriptions
       SET user_id = ?, p256dh = ?, auth = ?, user_agent = COALESCE(?, user_agent),
-          enabled = 1, last_seen_at = datetime('now')
+          enabled = 1, last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE endpoint = ?
     `).run(userId, p256dh, auth, userAgent || null, endpoint);
     return getByEndpoint(endpoint);
   }
   db.prepare(`
-    INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO push_subscriptions
+      (user_id, endpoint, p256dh, auth, user_agent, created_at, last_seen_at)
+    VALUES (?, ?, ?, ?, ?,
+      strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   `).run(userId, endpoint, p256dh, auth, userAgent || null);
   return getByEndpoint(endpoint);
+}
+
+// Touch last_seen_at if the endpoint exists; no-op otherwise. Used by the
+// client on page load to reflect actual activity rather than the moment of
+// last push delivery (which only fires when no client is visible — the
+// opposite of "active"). Returns whether a row was updated.
+export function heartbeatByEndpoint(userId, endpoint) {
+  const result = db.prepare(`
+    UPDATE push_subscriptions
+    SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ? AND endpoint = ?
+  `).run(userId, endpoint);
+  return result.changes > 0;
 }
 
 export function deleteByEndpoint(userId, endpoint) {

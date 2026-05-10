@@ -5,6 +5,7 @@ import {
   upsertSubscription,
   deleteByEndpoint,
   listAllForUser,
+  heartbeatByEndpoint,
 } from '../db/pushSubscriptions.js';
 
 const router = Router();
@@ -45,6 +46,13 @@ router.delete('/subscriptions', (req, res) => {
   if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
   deleteByEndpoint(req.user.id, endpoint);
   res.json({ ok: true });
+});
+
+router.post('/heartbeat', (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+  const updated = heartbeatByEndpoint(req.user.id, endpoint);
+  res.json({ ok: true, present: updated });
 });
 
 export default router;
