@@ -4,11 +4,13 @@
       <div class="sidebar-head">
         <span class="logo">caint</span>
         <span v-if="!connected" class="status off" title="Disconnected">●</span>
-        <RouterLink class="link first-action" to="/settings" title="Settings"><i class="fa-solid fa-gear"></i></RouterLink>
+      </div>
+      <BufferList />
+      <div class="sidebar-foot">
+        <RouterLink class="link" to="/settings" title="Settings"><i class="fa-solid fa-gear"></i></RouterLink>
         <button class="link" @click="showHighlights = true" title="Highlights"><i class="fa-regular fa-bell"></i></button>
         <button class="link" @click="openAddNetwork" title="Add network"><i class="fa-solid fa-plus"></i></button>
       </div>
-      <BufferList />
     </aside>
 
     <header v-if="active" class="topic">
@@ -183,9 +185,21 @@ onMounted(async () => {
 }
 .logo { color: var(--accent); font-weight: bold; }
 .status.off { color: var(--bad); }
-/* The first action button absorbs the spare horizontal space so the status
-   sits next to "caint" on the left and the icon buttons are right-aligned. */
-.first-action { margin-left: auto; }
+/* Three-column grid pins the cog flush-left, bell perfectly centered, and
+   plus flush-right regardless of glyph width. matches the input bar's
+   single-line height (8px padding + 1lh content + 1px border) so the
+   sidebar-foot's top border lines up with the input bar's top border. */
+.sidebar-foot {
+  margin-top: auto;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  align-items: center;
+}
+.sidebar-foot > :nth-child(1) { justify-self: start; }
+.sidebar-foot > :nth-child(2) { justify-self: center; }
+.sidebar-foot > :nth-child(3) { justify-self: end; }
 .link {
   background: none;
   border: none;
