@@ -513,4 +513,11 @@ input {
 }
 input:focus { outline: none; }
 input::placeholder { color: var(--fg-muted); font-style: italic; }
+
+/* iOS Safari auto-zooms when focusing any input with computed font-size
+   below 16px, and the global 14px would otherwise trigger it. Force 16px
+   on mobile widths only — desktop keeps the denser typography. */
+@media (max-width: 768px) {
+  input { font-size: 16px; }
+}
 </style>

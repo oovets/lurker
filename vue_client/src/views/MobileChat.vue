@@ -152,12 +152,25 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* The shell is a single-column flex stack pinned to the visible viewport.
-   --viewport-h is written by useVisualViewportHeight() and shrinks when the
-   iOS soft keyboard opens; falling back to 100dvh keeps the layout sensible
-   on first paint and on non-iOS browsers without visualViewport. */
+/* The shell is a fixed-position single-column flex stack pinned to the
+   *visual* viewport, not the layout viewport. This is what defeats iOS
+   Safari's keyboard-opens-and-scrolls-the-page-up behavior:
+     - position: fixed + top: 0 alone isn't enough — iOS still scrolls the
+       layout viewport when an input is focused, dragging fixed elements
+       along with it.
+     - height: var(--viewport-h) shrinks the shell to the visible area so
+       the input sits above the keyboard instead of behind it.
+     - translateY(var(--viewport-y)) cancels out Safari's auto-scroll so
+       the top of the shell lines up with the top of the visible area.
+   The 100dvh / 0 fallbacks keep the layout sensible on first paint and on
+   browsers without visualViewport. */
 .mchat {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   height: var(--viewport-h, 100dvh);
+  transform: translateY(var(--viewport-y, 0));
   display: flex;
   flex-direction: column;
   overflow: hidden;
