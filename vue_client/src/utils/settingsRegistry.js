@@ -67,10 +67,10 @@ export const REGISTRY = Object.freeze([
   {
     key: 'look.color.link',
     type: 'color',
-    default: 'var(--accent)',
+    default: 'var(--fg)',
     description:
       'Color of clickable URL links inside chat messages. ' +
-      'Any CSS color value; defaults to the accent color.',
+      'Any CSS color value; defaults to the foreground color.',
   },
   {
     key: 'look.color.good',

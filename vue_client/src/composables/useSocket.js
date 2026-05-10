@@ -96,9 +96,14 @@ function applyEvent(event) {
       break;
     case 'channel-joined':
       buffers.ensure(event.networkId, event.target);
+      buffers.setJoined(event.networkId, event.target, true);
       break;
     case 'channel-parted':
-      buffers.drop(event.networkId, event.target);
+      // Keep the buffer around so the user can still scroll history; just
+      // mark it un-joined so it renders dimmed in the buffer list. /close
+      // (or the server's buffer-closed broadcast) is what actually drops it.
+      buffers.setJoined(event.networkId, event.target, false);
+      buffers.setMembers(event.networkId, event.target, []);
       break;
     case 'typing':
       buffers.setTyping(event.networkId, event.target, event.nick, event.state);
@@ -140,7 +145,7 @@ function applyBacklog(payload) {
     unread: payload.unread,
     highlights: payload.highlights,
     highlightsCapped: payload.highlightsCapped,
-  });
+  }, payload.joined);
 }
 
 function handleMessage(raw) {

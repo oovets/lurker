@@ -322,6 +322,10 @@ onBeforeUnmount(() => {
   if (active.value) endTypingTo(active.value);
 });
 
+defineExpose({
+  focus: () => inputEl.value?.focus(),
+});
+
 function submit() {
   resetCompletion();
   closePicker();
@@ -365,8 +369,19 @@ function handleCommand(line, networkId, target) {
       }
       break;
     case 'part':
-    case 'leave':
-      socketSend({ type: 'part', networkId, channel: rest[0] || target, reason: rest.slice(1).join(' ') });
+    case 'leave': {
+      // /part leaves the channel but KEEPS the buffer so the user can scroll
+      // history and rejoin later. The buffer just renders dimmed in the
+      // sidebar. Use /close to actually drop a buffer.
+      const channel = rest[0] || target;
+      const reason = rest.slice(1).join(' ');
+      socketSend({ type: 'part', networkId, channel, reason });
+      break;
+    }
+    case 'close':
+      // Close the current buffer. For channels this also PARTs; for DMs it
+      // just hides the buffer. Server pseudo-buffers can't be closed.
+      socketSend({ type: 'close-buffer', networkId, target });
       break;
     case 'raw':
     case 'quote':
@@ -380,7 +395,7 @@ function handleCommand(line, networkId, target) {
       socketSend({ type: 'back' });
       break;
     case 'help':
-      alert('Commands: /me, /msg <nick> <text>, /join #chan, /part [#chan] [reason], /away [message], /back, /raw <line>');
+      alert('Commands: /me, /msg <nick> <text>, /join #chan, /part [#chan] [reason], /close, /away [message], /back, /raw <line>');
       break;
     default:
       socketSend({ type: 'raw', networkId, line: line.slice(1) });
@@ -393,7 +408,7 @@ function handleCommand(line, networkId, target) {
   display: flex;
   align-items: center;
   gap: 1ch;
-  padding: 4px 12px;
+  padding: 8px 12px;
   border-top: 1px solid var(--border);
 }
 .clock { color: var(--fg-muted); }
@@ -408,7 +423,7 @@ input {
   min-width: 0;
   background: transparent;
   border: none;
-  padding: 4px 0;
+  padding: 0;
   color: var(--fg);
 }
 input:focus { outline: none; }

@@ -1,22 +1,25 @@
 <template>
-  <div class="chat">
+  <div class="chat" @click="onChatClick">
     <aside class="sidebar">
       <div class="sidebar-head">
         <span class="logo">caint</span>
-        <span class="status" :class="{ on: connected, off: !connected }">{{ connected ? '●' : '○' }}</span>
-        <button class="link" @click="openAddNetwork" title="Add network">+</button>
+        <span v-if="!connected" class="status off" title="Disconnected">●</span>
+        <RouterLink class="link first-action" to="/settings" title="Settings"><i class="fa-solid fa-gear"></i></RouterLink>
+        <button class="link" @click="showHighlights = true" title="Highlights"><i class="fa-regular fa-bell"></i></button>
+        <button class="link" @click="openAddNetwork" title="Add network"><i class="fa-solid fa-plus"></i></button>
       </div>
-      <BufferList @edit-network="openEditNetwork" />
-      <div class="sidebar-foot">
-        <button class="link" @click="showHighlights = true" title="highlights">@</button>
-        <RouterLink class="link" to="/settings">settings</RouterLink>
-        <button class="link" @click="signOut">sign out</button>
-      </div>
+      <BufferList />
     </aside>
 
     <header v-if="active" class="topic">
       <span class="buffer">{{ bufferLabel }}</span>
-      <span v-if="memberCount != null" class="count">{{ '{' + memberCount + '}' }}</span>
+      <button
+        v-if="isServerBuffer"
+        class="link"
+        title="Edit network"
+        @click="editActiveNetwork"
+      ><i class="fa-solid fa-gear"></i></button>
+      <span v-if="memberCount != null" class="count">{{ memberCount }}</span>
       <template v-if="topic">
         <span class="sep">│</span>
         <span class="topic-text"><LinkedText :text="topic" /></span>
@@ -26,7 +29,7 @@
 
     <MessageList :pending-scroll-id="pendingScrollId" />
     <MemberList v-if="active" />
-    <MessageInput />
+    <MessageInput ref="messageInputRef" />
 
     <NetworkForm
       v-if="showNetworkForm"
@@ -43,9 +46,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
-import { useAuthStore } from '../stores/auth.js';
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import { useSettingsStore } from '../stores/settings.js';
@@ -60,18 +61,29 @@ import NetworkForm from '../components/NetworkForm.vue';
 import HighlightsModal from '../components/HighlightsModal.vue';
 import LinkedText from '../components/LinkedText.vue';
 
-const auth = useAuthStore();
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
 const settings = useSettingsStore();
-const router = useRouter();
 const { connected } = useSocket();
 
 const showNetworkForm = ref(false);
 const editingNetwork = ref(null);
 const showHighlights = ref(false);
 const pendingScrollId = ref(null);
+const messageInputRef = ref(null);
 const { activeKey } = storeToRefs(networks);
+
+// Forward stray clicks anywhere in the chat frame (topic bar, message list,
+// member list, sidebar gutter, etc.) into the message input. The selector
+// excludes anything genuinely interactive — buttons, links, form controls,
+// and modal contents — and we bail if the user is in the middle of selecting
+// text so we don't kill their selection.
+function onChatClick(e) {
+  if (e.target.closest('button, a, input, textarea, select, label, .modal, [contenteditable=true]')) return;
+  const sel = window.getSelection();
+  if (sel && sel.toString().length > 0) return;
+  messageInputRef.value?.focus();
+}
 
 function onJumpToMessage({ networkId, target, messageId }) {
   buffers.activate(networkId, target);
@@ -95,11 +107,13 @@ const active = computed(() => networks.activeBuffer);
 const activeBuf = computed(() => (activeKey.value ? buffers.byKey(activeKey.value) : null));
 const topic = computed(() => activeBuf.value?.topic);
 
+const isServerBuffer = computed(() => !!active.value?.target?.startsWith(':server:'));
+
 const bufferLabel = computed(() => {
   const t = active.value?.target;
   if (!t) return '';
-  if (t.startsWith(':server:')) return '[server]';
-  return `[${t}]`;
+  if (isServerBuffer.value) return active.value?.network?.name || 'server';
+  return t;
 });
 
 const memberCount = computed(() => {
@@ -107,6 +121,11 @@ const memberCount = computed(() => {
   if (!t || !t.startsWith('#')) return null;
   return activeBuf.value?.members?.length ?? null;
 });
+
+function editActiveNetwork() {
+  const net = active.value?.network;
+  if (net) openEditNetwork(net);
+}
 
 onMounted(async () => {
   if (!settings.loaded) settings.fetchAll().catch(() => {});
@@ -122,11 +141,6 @@ onMounted(async () => {
     if (data?.kind === 'jump') onJumpToMessage(data);
   });
 });
-
-async function signOut() {
-  await auth.logout();
-  router.replace('/login');
-}
 </script>
 
 <style scoped>
@@ -167,30 +181,25 @@ async function signOut() {
   align-items: center;
   gap: 8px;
 }
-.logo { color: var(--accent); font-weight: bold; flex: 1; }
-.status.on { color: var(--good); }
+.logo { color: var(--accent); font-weight: bold; }
 .status.off { color: var(--bad); }
-.sidebar-foot {
-  margin-top: auto;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+/* The first action button absorbs the spare horizontal space so the status
+   sits next to "caint" on the left and the icon buttons are right-aligned. */
+.first-action { margin-left: auto; }
 .link {
   background: none;
   border: none;
   color: var(--accent);
-  padding: 2px 4px;
+  padding: 0 4px;
   cursor: pointer;
   font: inherit;
+  text-decoration: none;
 }
 .link:hover { color: var(--fg); }
 
 .topic {
   grid-area: topic;
-  padding: 0 12px 1ch;
+  padding: 8px 12px;
   display: flex;
   align-items: baseline;
   gap: 1ch;

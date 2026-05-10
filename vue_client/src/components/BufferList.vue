@@ -15,11 +15,6 @@
           :title="`${serverHighlights(net.id)} highlight${serverHighlights(net.id) === 1 ? '' : 's'}`"
         >●</span>
         <span v-if="serverUnread(net.id) > 0" class="badge">{{ serverUnread(net.id) }}</span>
-        <button
-          class="settings"
-          title="Edit network"
-          @click.stop="$emit('edit-network', net)"
-        >⚙</button>
       </div>
       <ul class="channels">
         <li
@@ -29,6 +24,7 @@
             active: isActive(net.id, buf.target),
             unread: buf.unread > 0,
             highlighted: buf.highlighted > 0,
+            'not-joined': isUnjoined(buf, net.id),
           }"
           @click="select(net.id, buf.target)"
         >
@@ -39,11 +35,6 @@
             :title="`${buf.highlighted} highlight${buf.highlighted === 1 ? '' : 's'}`"
           >●</span>
           <span v-if="buf.unread > 0" class="badge">{{ buf.unread }}</span>
-          <button
-            class="part"
-            :title="closeTitleFor(buf)"
-            @click.stop="closeBuffer(net.id, buf.target)"
-          >×</button>
         </li>
       </ul>
     </div>
@@ -54,10 +45,7 @@
 <script setup>
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
-import { socketSend } from '../composables/useSocket.js';
 import { useNickColors } from '../composables/useNickColors.js';
-
-defineEmits(['edit-network']);
 
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
@@ -137,12 +125,14 @@ function stateClass(networkId) {
   return 'bad';
 }
 
-function closeBuffer(networkId, target) {
-  socketSend({ type: 'close-buffer', networkId, target });
-}
-
-function closeTitleFor(buf) {
-  return buf.target.startsWith('#') ? 'Leave and close channel' : 'Close conversation';
+// Channels render dimmed when we're either explicitly parted (joined=false)
+// or when the network itself isn't connected — in both cases the buffer is
+// just a history view, not a live channel. DMs and server buffers have no
+// "joined" concept and are never dimmed by this rule.
+function isUnjoined(buf, networkId) {
+  if (!buf.target.startsWith('#')) return false;
+  if (buf.joined === false) return true;
+  return networks.states[networkId]?.state !== 'connected';
 }
 </script>
 
@@ -224,6 +214,10 @@ function closeTitleFor(buf) {
 }
 .channels li.unread .label { font-weight: 600; color: var(--fg); }
 .channels li.highlighted .label { color: var(--warn); }
+/* Parted/disconnected channels render as a history view rather than a live
+   buffer. Apply opacity to the whole row so badges, labels, and tree guides
+   all dim together; unread/highlight colors still come through. */
+.channels li.not-joined { opacity: 0.5; }
 .label {
   flex: 1;
   white-space: nowrap;
@@ -235,26 +229,6 @@ function closeTitleFor(buf) {
   padding: 0 2px;
 }
 .badge.highlight { color: var(--warn); }
-.part {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  padding: 0 4px;
-  cursor: pointer;
-  visibility: hidden;
-}
-.channels li:hover .part,
-.channels li.active .part { visibility: visible; }
-.part:hover { color: var(--bad); }
-
-.settings {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  padding: 0 2px;
-  cursor: pointer;
-}
-.settings:hover { color: var(--fg); }
 
 .empty { padding: 12px; color: var(--fg-muted); font-style: italic; }
 </style>

@@ -301,6 +301,10 @@ export function attachWsHub(httpServer, sessionSecret) {
           target,
           events,
           speakers,
+          // For channels: are we currently joined? Drives the dim/active style
+          // in the buffer list. Non-channel buffers (DMs, :server:) have no
+          // join concept — flag them as joined so they never get dimmed.
+          joined: target.startsWith('#') ? conn.channels.has(target.toLowerCase()) : true,
           lastReadId: counts.lastReadId,
           unread: counts.unread,
           highlights: counts.highlights,

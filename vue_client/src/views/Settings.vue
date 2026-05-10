@@ -44,6 +44,7 @@
       <p v-else class="muted small">No passkeys registered.</p>
       <div class="passkey-add">
         <button class="link" :disabled="passkeyBusy" @click="onAddPasskey">add passkey</button>
+        <button class="link danger" @click="signOut">sign out</button>
       </div>
     </section>
 
@@ -138,7 +139,7 @@
             :disabled="rule.auto_managed_network_id != null"
             @click="onRuleDelete(rule)"
             title="delete rule"
-          >×</button>
+          ><i class="fa-solid fa-xmark"></i></button>
         </li>
       </ul>
       <div class="rule-add">
@@ -230,6 +231,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useSettingsStore } from '../stores/settings.js';
 import { useHighlightRulesStore } from '../stores/highlightRules.js';
 import { usePushSubscriptionsStore } from '../stores/pushSubscriptions.js';
@@ -249,6 +251,7 @@ const settings = useSettingsStore();
 const rulesStore = useHighlightRulesStore();
 const pushSubsStore = usePushSubscriptionsStore();
 const auth = useAuthStore();
+const router = useRouter();
 const search = ref('');
 const passkeys = ref([]);
 const passkeyError = ref('');
@@ -347,6 +350,11 @@ async function onRemovePasskey(pk) {
   } finally {
     passkeyBusy.value = false;
   }
+}
+
+async function signOut() {
+  await auth.logout();
+  router.replace('/login');
 }
 
 async function onEnableThisClient() {
@@ -696,5 +704,8 @@ async function onResetAll() {
 }
 .passkey-add {
   margin-top: 4px;
+  display: flex;
+  gap: 1ch;
+  align-items: center;
 }
 </style>

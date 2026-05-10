@@ -34,6 +34,10 @@ function ensureBuffer(state, networkId, target) {
       messages: [],
       members: [],
       topic: null,
+      // Channels flip to false on PART/KICK and back to true on JOIN. DMs and
+      // server pseudo-buffers have no join concept; default true so they
+      // never render dimmed.
+      joined: true,
       unread: 0,
       highlighted: 0,
       highlightsCapped: false,
@@ -95,7 +99,7 @@ export const useBuffersStore = defineStore('buffers', {
         delete buf.typing[event.nick];
       }
     },
-    replaceBacklog(networkId, target, events, speakers, readState) {
+    replaceBacklog(networkId, target, events, speakers, readState, joined) {
       const buf = ensureBuffer(this, networkId, target);
       buf.messages = events.slice(-MAX_PER_BUFFER);
       const first = buf.messages[0];
@@ -103,6 +107,7 @@ export const useBuffersStore = defineStore('buffers', {
       buf.hasMore = events.length >= 50;
       if (speakers !== undefined) this.seedSpeakers(networkId, target, speakers);
       if (readState) this.applyReadState(networkId, target, readState);
+      if (typeof joined === 'boolean') buf.joined = joined;
     },
     prependHistory(networkId, target, events, hasMore, speakers) {
       const buf = ensureBuffer(this, networkId, target);
@@ -183,6 +188,11 @@ export const useBuffersStore = defineStore('buffers', {
     },
     drop(networkId, target) {
       delete this.buffers[key(networkId, target)];
+    },
+    setJoined(networkId, target, joined) {
+      const buf = this.buffers[key(networkId, target)];
+      if (!buf) return;
+      buf.joined = !!joined;
     },
     // Server is the source of truth for lastReadId / unread / highlights.
     // Apply on backlog (initial snapshot) and on every read-state broadcast

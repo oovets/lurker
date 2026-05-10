@@ -3,7 +3,7 @@
     <div class="card">
       <header class="head">
         <h2>highlights</h2>
-        <button class="link" @click="$emit('close')" title="close">×</button>
+        <button class="link" @click="$emit('close')" title="close"><i class="fa-solid fa-xmark"></i></button>
       </header>
       <ul v-if="matches.length" class="match-list">
         <li
