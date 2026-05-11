@@ -8,6 +8,12 @@ export function getNetwork(id, userId) {
   return db.prepare('SELECT * FROM networks WHERE id = ? AND user_id = ?').get(id, userId);
 }
 
+const ownsNetworkStmt = db.prepare('SELECT 1 FROM networks WHERE id = ? AND user_id = ? LIMIT 1');
+export function ownsNetwork(userId, networkId) {
+  if (!userId || !networkId) return false;
+  return !!ownsNetworkStmt.get(networkId, userId);
+}
+
 export function createNetwork(userId, fields) {
   const { name, host, port, tls, nick, username, realname, server_password, autoconnect, sasl_account, sasl_password } = fields;
   const result = db.prepare(`

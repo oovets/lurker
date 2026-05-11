@@ -16,7 +16,7 @@ import {
   isClosed,
   closedKeySetForUser,
 } from '../db/closedBuffers.js';
-import { upsertChannel } from '../db/networks.js';
+import { upsertChannel, ownsNetwork } from '../db/networks.js';
 import { getUserSettings } from '../db/settings.js';
 import { defaultsAsObject } from './settingsRegistry.js';
 import { SESSION_COOKIE } from '../middleware/auth.js';
@@ -332,6 +332,18 @@ export function attachWsHub(httpServer, sessionSecret) {
 
   function handleClientMessage(ws, user, msg) {
     const userId = user.id;
+    // Any message that carries a networkId must reference a network the caller
+    // owns. Handlers below trust msg.networkId, so the check belongs here at
+    // the boundary rather than at each call site. Messages without a
+    // networkId (presence, snapshot, away, back) fall through.
+    if (msg && msg.networkId !== undefined && msg.networkId !== null) {
+      const networkId = Number(msg.networkId);
+      if (!Number.isInteger(networkId) || !ownsNetwork(userId, networkId)) {
+        send(ws, { kind: 'error', text: 'unknown network' });
+        return;
+      }
+      msg.networkId = networkId;
+    }
     switch (msg.type) {
       case 'presence':
         ws.presence = { visible: !!msg.visible };
