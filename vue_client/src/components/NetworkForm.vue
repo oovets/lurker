@@ -209,12 +209,17 @@ h2 {
 }
 label { display: flex; flex-direction: column; gap: 3px; color: var(--fg-muted); }
 label span { text-transform: uppercase; letter-spacing: 0.04em; }
-label input { color: var(--fg); }
+/* width:100% + border-box keeps inputs sized to their label rather than their
+   intrinsic (size=20) width, so flex columns can't be pushed wider than the
+   card. */
+label input { color: var(--fg); width: 100%; box-sizing: border-box; }
 .row { display: flex; gap: 8px; align-items: end; }
-.grow { flex: 1; }
+/* min-width:0 lets a flex item shrink below its content's intrinsic width —
+   without it two side-by-side inputs (the SASL row) overflow the card. */
+.grow { flex: 1; min-width: 0; }
 .port { width: 80px; }
 .tls { width: 48px; align-items: center; }
-.tls input { transform: scale(1.1); }
+.tls input { width: auto; transform: scale(1.1); }
 .check { flex-direction: row; align-items: center; gap: 8px; }
 .check input { width: auto; }
 .check span { text-transform: none; letter-spacing: normal; color: var(--fg); font-size: inherit; }
