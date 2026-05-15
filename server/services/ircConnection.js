@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Brad Root
 // SPDX-License-Identifier: Elastic-2.0
 
-import IRC from 'irc-framework';
+import IRC, { ircLineParser } from 'irc-framework';
 import { insertMessage, hasMessageForTarget, listBufferTargets } from '../db/messages.js';
 import { upsertChannel } from '../db/networks.js';
 import { isClosed as isBufferClosed } from '../db/closedBuffers.js';
@@ -171,6 +171,22 @@ export class IrcConnection {
   bind() {
     const c = this.client;
 
+    // Surface server numerics (welcome banner, lusers, SASL confirmation,
+    // umode, hostmask) into the server buffer. irc-framework consumes these
+    // for internal state and emits structured events ('registered', 'server
+    // options', …) without re-emitting the original text, so the raw stream
+    // is the only place the wire text is still visible. See
+    // formatServerNumeric() for the per-command rendering and the deliberate
+    // exclusions (005/ISUPPORT, etc.).
+    c.on('raw', (event) => {
+      if (!event?.from_server || typeof event.line !== 'string') return;
+      let msg;
+      try { msg = ircLineParser(event.line); } catch (_) { return; }
+      const text = formatServerNumeric(msg);
+      if (!text) return;
+      this.publish({ type: 'motd', target: this.serverTarget(), text });
+    });
+
     c.on('registered', (event) => {
       this.userModes.clear();
       this.lagMs = null;
@@ -221,6 +237,19 @@ export class IrcConnection {
         this.regainNick = this.network.nick;
         this.pendingRegainSetup = true;
       }
+      // Summary line for CAP negotiation. irc-framework doesn't re-emit the
+      // CAP LS/REQ/ACK wire lines individually, but by the time 'registered'
+      // fires the negotiated set is final on network.cap.enabled.
+      try {
+        const enabled = (c.network?.cap?.enabled || []).slice().sort();
+        if (enabled.length > 0) {
+          this.publish({
+            type: 'motd',
+            target: this.serverTarget(),
+            text: `Negotiated capabilities: ${enabled.join(' ')}`,
+          });
+        }
+      } catch (_) { /* ignore */ }
       try {
         highlightRulesService.upsertAutoNickRule(this.network.user_id, this.network.id, registeredNick);
       } catch (e) {
@@ -1258,4 +1287,61 @@ function formatWhoisLines(w) {
     lines.push(`  idle: ${Number.isFinite(idleSec) ? `${idleSec}s` : w.idle}${signonStr}`);
   }
   return lines;
+}
+
+// Convert a server-sourced numeric reply (parsed IrcMessage) into a single
+// line of human-readable text for the server buffer. Returns null for any
+// numeric we deliberately don't surface (e.g. 005 ISUPPORT, which spans many
+// lines and is consumed for internal state) and for non-numerics.
+//
+// irc-framework's command handlers consume these numerics into structured
+// state (network.options, network.server, network.ircd, …) and emit
+// higher-level events like 'registered', but the original wire text is not
+// re-emitted — so without this pass the server buffer jumps straight from
+// the pre-registration NOTICE * Auth lines to the MOTD, hiding the welcome
+// banner, lusers info, SASL confirmation, umode and hostmask.
+//
+// The first param on every server numeric is the target nick; the rest is
+// what we want to render. Most replies put the human-readable form in the
+// trailing param (last element), so a default of "use the last param" gets
+// us most of the way; the exceptions (004 MYINFO, 221 UMODEIS, 252-254
+// LUSER counts, 396 HOSTCLOAKING) have explicit branches.
+export function formatServerNumeric(msg) {
+  if (!msg) return null;
+  const cmd = (msg.command || '').toUpperCase();
+  const p = msg.params || [];
+  switch (cmd) {
+    case '001': // RPL_WELCOME — "Welcome to the X Network nick"
+    case '002': // RPL_YOURHOST — "Your host is X, running version Y"
+    case '003': // RPL_CREATED — "This server was created X"
+    case '250': // RPL_STATSCONN — "Highest connection count: …"
+    case '251': // RPL_LUSERCLIENT — "There are N users…"
+    case '255': // RPL_LUSERME — "I have N clients…"
+    case '265': // RPL_LOCALUSERS — "Current local users N, max M"
+    case '266': // RPL_GLOBALUSERS — "Current global users N, max M"
+    case '900': // RPL_LOGGEDIN — "You are now logged in as X"
+    case '903': // RPL_SASLLOGGEDIN — "SASL authentication successful"
+      return p[p.length - 1] || null;
+    case '004': { // RPL_MYINFO — [nick, server, ircd, umodes, chmodes, paramch]
+      const [, server, ircd, umodes, chmodes, paramch] = p;
+      const parts = [];
+      if (server) parts.push(`Host: ${server}`);
+      if (ircd) parts.push(`IRCd: ${ircd}`);
+      if (umodes) parts.push(`user modes: ${umodes}`);
+      if (chmodes) parts.push(`channel modes: ${chmodes}`);
+      if (paramch) parts.push(`parametric channel modes: ${paramch}`);
+      return parts.length ? parts.join(', ') : null;
+    }
+    case '221': // RPL_UMODEIS — [nick, "+iw"]
+      return p[1] ? `Your user mode: ${p[1]}` : null;
+    case '252': // RPL_LUSEROP — [nick, count, "IRC Operators online"]
+    case '253': // RPL_LUSERUNKNOWN — [nick, count, "unknown connection(s)"]
+    case '254': // RPL_LUSERCHANNELS — [nick, count, "channels formed"]
+      if (!p[1] && !p[2]) return null;
+      return `${p[1] || ''} ${p[2] || ''}`.trim();
+    case '396': // RPL_HOSTCLOAKING — [nick, hostmask, "is now your displayed host"]
+      return p[1] ? `Your hostmask: ${p[1]}` : null;
+    default:
+      return null;
+  }
 }
