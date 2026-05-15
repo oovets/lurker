@@ -61,6 +61,8 @@ import { useUploadsStore, onInsertUrl } from '../stores/uploads.js';
 import { useToastsStore } from '../stores/toasts.js';
 import { socketSend, socketSendWithAck } from '../composables/useSocket.js';
 import { requestScrollToBottom } from '../composables/useScrollState.js';
+import { setComposingState } from '../composables/useComposing.js';
+import { chunkCountForSay, chunkCountForAction } from '../utils/messageSplit.js';
 import NickPicker from './NickPicker.vue';
 
 const networks = useNetworksStore();
@@ -139,6 +141,42 @@ let typingState = null;
 let lastActiveSentAt = 0;
 let inactivityTimer = null;
 let typingTarget = null;
+
+// Outgoing-split awareness. We estimate how many IRC lines the current input
+// would split into and push that to the shared composing state so StatusBar
+// can render the SPLIT/FLOOD indicator. `pendingSplitConfirm` is set the
+// first time the user hits Send on a message that the gate rejects — a
+// second press within the same draft proceeds. Editing the text clears it,
+// so a fresh draft starts from a clean state.
+let pendingSplitConfirm = false;
+
+// Strip a leading slash command (/me, /msg <who>) so chunk counting reflects
+// what irc-framework actually has to encode. For /me the relevant bytes are
+// the action body, not the slash-command prefix. For /msg the body goes to
+// some other target, but the wire chunks are the same. Other slash commands
+// (/raw, /join, etc.) don't pass through the splitter — return null to
+// signal "no split risk".
+function bodyForSplit(text) {
+  if (!text) return { body: '', isAction: false };
+  if (text[0] !== '/') return { body: text, isAction: false };
+  const m = text.match(/^\/(\w+)\s*(.*)$/s);
+  if (!m) return { body: '', isAction: false };
+  const cmd = m[1].toLowerCase();
+  if (cmd === 'me') return { body: m[2], isAction: true };
+  if (cmd === 'msg' || cmd === 'query') {
+    // /msg <who> <body...> — drop the recipient nick from the body.
+    const rest = m[2];
+    const sp = rest.indexOf(' ');
+    return { body: sp >= 0 ? rest.slice(sp + 1) : '', isAction: false };
+  }
+  return { body: '', isAction: false };
+}
+
+function computeChunks(text) {
+  const { body, isAction } = bodyForSplit(text);
+  const chunks = isAction ? chunkCountForAction(body) : chunkCountForSay(body);
+  return { chunks, isAction };
+}
 
 function sendTyping(networkId, target, state) {
   socketSend({ type: 'typing', networkId, target, state });
@@ -395,6 +433,15 @@ function onInput() {
   // Done before the sendable gate so this still fires on :server: buffers
   // where `/raw` history is just as relevant.
   if (historyIndex !== null) resetHistoryNav();
+  // Any edit invalidates the "second press confirms" override — otherwise the
+  // user could be holding a flood-confirm token from an entirely different
+  // draft. Cheap to clear unconditionally.
+  pendingSplitConfirm = false;
+  // Republish composing state on every keystroke so StatusBar's SPLIT/FLOOD
+  // indicator stays live. We do this even on :server: buffers and slash
+  // commands (computeChunks handles both — most return 0 chunks).
+  const { chunks, isAction } = computeChunks(text.value);
+  setComposingState({ chunks, isAction });
   if (!sendable.value) return;
   if (completion) resetCompletion();
   refreshPicker();
@@ -437,6 +484,10 @@ watch(active, (newActive, oldActive) => {
   resetCompletion();
   closePicker();
   resetHistoryNav();
+  // A switch between buffers carries the draft along (text is component-
+  // level, not per-buffer) but any unused split-confirm token doesn't
+  // transfer — a fresh buffer is a fresh consent decision.
+  pendingSplitConfirm = false;
   if (oldActive && (!newActive || oldActive.target !== newActive.target || oldActive.networkId !== newActive.networkId)) {
     endTypingTo(oldActive);
   }
@@ -553,6 +604,8 @@ function commitInput(raw, networkId, target) {
   inputHistory.add(networkId, target, raw);
   socketSend({ type: 'input-history-add', networkId, target, text: raw });
   text.value = '';
+  pendingSplitConfirm = false;
+  setComposingState({ chunks: 0, isAction: false });
   resetHistoryNav();
   // Re-pin to the bottom so a user who was scrolled up reading history sees
   // their own send land — and the live-append watcher in MessageList keeps
@@ -566,6 +619,46 @@ async function submit() {
   const raw = text.value;
   if (!raw.trim() || !active.value) return;
   const { networkId, target } = active.value;
+
+  // Outgoing-split gate. irc-framework will break anything past ~350 bytes
+  // into multiple PRIVMSGs on the wire, which on a busy channel reads as a
+  // flood. Three tiers:
+  //   - /me with 2+ chunks: hard block (CTCP ACTION can't reasonably split)
+  //   - 3+ chunks: always require a second Send press (flood)
+  //   - 2 chunks: gated by chat.allow_split_messages (off → require second
+  //     press; on → send silently)
+  // computeChunks() returns 0 for slash commands we don't route through
+  // PRIVMSG, so /join, /raw, etc. fall right through.
+  const { chunks, isAction } = computeChunks(raw);
+  if (isAction && chunks > 1) {
+    toasts.push({
+      title: 'Action message too long',
+      body: "Actions can't be split across IRC lines — shorten it and try again.",
+      kind: 'error',
+      ttlMs: 6000,
+    });
+    return;
+  }
+  if (chunks > 1) {
+    const flood = chunks >= 3;
+    const allowSplit = !!settings.effective('chat.allow_split_messages');
+    const blocked = flood || !allowSplit;
+    if (blocked && !pendingSplitConfirm) {
+      pendingSplitConfirm = true;
+      toasts.push({
+        title: flood
+          ? `Will flood ${chunks} lines — Send again to confirm`
+          : `Will split into ${chunks} lines — Send again to confirm`,
+        body: !flood && !allowSplit
+          ? 'Enable "Allow auto-split messages" in Settings to send splits without confirming.'
+          : 'Lines will arrive back-to-back in the channel.',
+        kind: 'warn',
+        ttlMs: 7000,
+      });
+      return;
+    }
+  }
+  pendingSplitConfirm = false;
 
   if (raw.startsWith('/')) {
     // Slash commands cover a lot of ground (joins, raws, /me, etc.). Treat

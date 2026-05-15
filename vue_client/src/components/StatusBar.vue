@@ -12,6 +12,7 @@
     <span v-if="lagLabel && !compact" class="seg lag" :class="lagClass">{{ lagLabel }}</span>
     <span v-if="uploadLabel" class="seg upload" :class="{ failed: uploads.failedAt }">{{ uploadLabel }}</span>
     <button v-if="newBelow > 0 && !compact" class="seg jump" type="button" @click="onJumpToBottom">{{ newBelow }} new ↓</button>
+    <span v-if="splitLabel" class="seg split" :class="splitClass">{{ splitLabel }}</span>
     <span v-if="typingSegments.length" class="seg typing">Typing: <template v-for="(seg, i) in typingSegments" :key="i"><span :style="seg.color ? { color: seg.color } : null">{{ seg.text }}</span></template></span>
   </div>
 </template>
@@ -24,6 +25,7 @@ import { useSettingsStore } from '../stores/settings.js';
 import { useUploadsStore } from '../stores/uploads.js';
 import { useNickColors } from '../composables/useNickColors.js';
 import { useScrollState, requestScrollToBottom } from '../composables/useScrollState.js';
+import { useComposing } from '../composables/useComposing.js';
 import { formatTimestamp } from '../utils/timestamp.js';
 import { isPeerOffline, isPeerAway } from '../utils/peerPresence.js';
 
@@ -39,6 +41,21 @@ const buffers = useBuffersStore();
 const settings = useSettingsStore();
 const uploads = useUploadsStore();
 const nickColors = useNickColors();
+const composing = useComposing();
+
+// SPLIT (warn) at 2 chunks, FLOOD (bad) at 3+. Lives just before the typing
+// indicator so heavy composers can see it without taking their eyes off the
+// input. Empty / single-chunk drafts render nothing.
+const splitLabel = computed(() => {
+  if (composing.chunks <= 1) return '';
+  if (composing.isAction) return 'ACTION TOO LONG';
+  return composing.chunks >= 3 ? `FLOOD (${composing.chunks})` : 'SPLIT';
+});
+const splitClass = computed(() => {
+  if (composing.chunks <= 1) return '';
+  if (composing.isAction || composing.chunks >= 3) return 'bad';
+  return 'warn';
+});
 
 const uploadLabel = computed(() => {
   if (uploads.current) return `Uploading: ${uploads.current.progress}%`;
@@ -222,6 +239,9 @@ function onJumpToBottom() {
 .seg.peer-status.away { color: var(--fg-muted); }
 .seg.upload { color: var(--accent); }
 .seg.upload.failed { color: var(--bad); }
+.seg.split { font-weight: 600; letter-spacing: 0.05em; }
+.seg.split.warn { color: var(--warn); }
+.seg.split.bad { color: var(--bad); }
 .seg.jump {
   background: none;
   border: none;

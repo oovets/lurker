@@ -8,6 +8,7 @@ import { reopenBuffer } from '../db/closedBuffers.js';
 import { getUserAwayState, writeAwayMarker, writeBackMarker } from '../db/userAwayState.js';
 import { listPinnedForUser } from '../db/pinnedBuffers.js';
 import { listCollapsedForUser } from '../db/nicklistCollapsed.js';
+import { splitSay, splitAction } from './messageSplit.js';
 import db from '../db/index.js';
 
 // Translate a user_away_state row into the in-memory shape IrcConnection
@@ -155,32 +156,43 @@ class IrcManager extends EventEmitter {
     deleteChannel(networkId, name);
   }
 
+  // Long messages need to be split: irc-framework breaks anything past ~350
+  // bytes into separate PRIVMSGs on the wire, but we used to publish the full
+  // text as a single self-message event — so the sender saw one bubble while
+  // peers saw N. Splitting on our side and publishing per chunk keeps the
+  // local view symmetric with what was actually transmitted.
   send(userId, networkId, target, text) {
     const conn = this.getConnection(userId, networkId);
     if (!conn) return false;
-    conn.say(target, text);
-    conn.publish({
-      type: 'message',
-      target,
-      nick: conn.client.user?.nick,
-      text,
-      kind: 'privmsg',
-      self: true,
-    });
+    const chunks = splitSay(text);
+    for (const chunk of chunks) {
+      conn.say(target, chunk);
+      conn.publish({
+        type: 'message',
+        target,
+        nick: conn.client.user?.nick,
+        text: chunk,
+        kind: 'privmsg',
+        self: true,
+      });
+    }
     return true;
   }
 
   action(userId, networkId, target, text) {
     const conn = this.getConnection(userId, networkId);
     if (!conn) return false;
-    conn.action(target, text);
-    conn.publish({
-      type: 'action',
-      target,
-      nick: conn.client.user?.nick,
-      text,
-      self: true,
-    });
+    const chunks = splitAction(text);
+    for (const chunk of chunks) {
+      conn.action(target, chunk);
+      conn.publish({
+        type: 'action',
+        target,
+        nick: conn.client.user?.nick,
+        text: chunk,
+        self: true,
+      });
+    }
     return true;
   }
 

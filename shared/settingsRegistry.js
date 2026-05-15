@@ -372,6 +372,26 @@ export const REGISTRY = Object.freeze([
       'are preferred when picking which names to show.',
   },
 
+  // ─── Composing (outgoing message guardrails) ─────────────────────────
+  // irc-framework splits anything past ~350 bytes into multiple PRIVMSGs on
+  // the wire. The default UX blocks the user from accidentally flooding —
+  // they have to either shorten, hit Send a second time to confirm, or flip
+  // this on to send splits silently like a traditional client.
+  {
+    key: 'chat.allow_split_messages',
+    category: 'chat',
+    group: 'composing',
+    type: 'bool',
+    default: false,
+    description:
+      'Allow long messages to send as multiple consecutive IRC lines without ' +
+      'confirmation. When off (the default), trying to send a message that ' +
+      "would split shows a SPLIT warning in the status bar and won't submit " +
+      'until you press Send a second time. Messages that would split into ' +
+      'three or more lines always require confirmation regardless of this ' +
+      'setting. /me actions never split — they are blocked outright.',
+  },
+
   // ─── Smart filter (join/part/quit/nick noise) ─────────────────────────
   {
     key: 'chat.smart_filter',
