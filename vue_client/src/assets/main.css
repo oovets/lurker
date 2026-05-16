@@ -30,6 +30,16 @@
   --font-weight: 400;
 }
 
+/* Mobile bumps the base size to 16px. Two reasons: iOS Safari auto-zooms
+   when an <input>/<textarea>'s computed font-size is below 16px (so we'd
+   need a textarea-specific override either way), and 16px is the iOS body-
+   text default — letting the whole shell scale together keeps the input
+   and the message list visually consistent rather than the chrome reading
+   smaller than what the user is typing into it. Desktop stays at 14px. */
+@media (max-width: 768px) {
+  :root { --font-size: 16px; }
+}
+
 * { box-sizing: border-box; }
 
 html, body, #app {

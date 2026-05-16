@@ -10,10 +10,20 @@
         v-for="m in sorted"
         :key="nickOf(m)"
         :class="liClass(m)"
-        @contextmenu.prevent="onMemberContextMenu($event, m)"
+        @click="onRowClick($event, m)"
+        @contextmenu.prevent="onRowContextMenu($event, m)"
       >
         <span class="prefix">{{ prefixOf(m) }}</span>
         <span class="nick" :style="nickStyle(m)">{{ nickOf(m) }}</span>
+        <button
+          v-if="!isSelf(m)"
+          type="button"
+          class="row-actions"
+          title="Actions"
+          aria-label="Member actions"
+          @click.stop="onActionsClick($event, m)"
+          @contextmenu.stop.prevent
+        ><i class="fa-solid fa-ellipsis-vertical"></i></button>
       </li>
     </ul>
     <IgnoreModal
@@ -32,14 +42,14 @@ import { computed, ref } from 'vue';
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import { useNickColors } from '../composables/useNickColors.js';
-import { useContextMenu } from '../composables/useContextMenu.js';
+import { useMemberActions } from '../composables/useMemberActions.js';
 import { useIgnoresStore } from '../stores/ignores.js';
 import IgnoreModal from './IgnoreModal.vue';
 
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
 const nicks = useNickColors();
-const menu = useContextMenu();
+const memberActions = useMemberActions();
 const ignores = useIgnoresStore();
 const modalMember = ref(null);
 
@@ -72,16 +82,29 @@ function userOf(m) { return typeof m === 'object' && m?.user ? m.user : null; }
 function hostOf(m) { return typeof m === 'object' && m?.host ? m.host : null; }
 function modesOf(m) { return Array.isArray(m?.modes) ? m.modes : []; }
 
-function onMemberContextMenu(e, m) {
+// Click handlers funnel through one builder so right-click, row-click
+// (mobile tap, desktop click — member rows have no other action), and the
+// hover three-dots all open the same menu. Anchor by event coords for the
+// row paths and by button rect for the three-dots so the popup drops out
+// from the affordance the user actually pointed at.
+function menuContext() {
+  return {
+    networkId: buffer.value?.networkId,
+    isSelf,
+    onIgnore: (m) => { modalMember.value = m; },
+  };
+}
+function onRowClick(e, m) {
   if (!buffer.value || isSelf(m)) return;
-  const items = [
-    {
-      label: 'Ignore…',
-      icon: 'fa-solid fa-ban',
-      onClick: () => { modalMember.value = m; },
-    },
-  ];
-  menu.open(items, e.clientX, e.clientY);
+  memberActions.openMenuFor(m, menuContext(), e.clientX, e.clientY);
+}
+function onRowContextMenu(e, m) {
+  if (!buffer.value || isSelf(m)) return;
+  memberActions.openMenuFor(m, menuContext(), e.clientX, e.clientY);
+}
+function onActionsClick(e, m) {
+  if (!buffer.value || isSelf(m)) return;
+  memberActions.openMenuFromButton(m, menuContext(), e.currentTarget);
 }
 function prefixOf(m) {
   const modes = modesOf(m);
@@ -146,8 +169,33 @@ li {
   align-items: baseline;
   gap: 2px;
   padding: 1px 10px;
+  user-select: none;
+  cursor: pointer;
+  position: relative;
 }
 li:hover { background: var(--bg-soft); }
+
+/* Hover affordance — invisible until the row is hovered, then drops in from
+   the right edge of the row. Hidden entirely on touch breakpoints; mobile
+   uses tap-anywhere-on-row to open the same menu. */
+.row-actions {
+  margin-left: auto;
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 80ms linear;
+}
+li:hover .row-actions,
+.row-actions:focus-visible { opacity: 1; }
+.row-actions:hover { color: var(--fg); }
+@media (max-width: 768px) {
+  .row-actions { display: none; }
+}
 .prefix { width: 10px; text-align: center; color: var(--fg-muted); }
 li.mode-\~ .prefix { color: var(--member-owner); }
 li.mode-\& .prefix { color: var(--member-admin); }

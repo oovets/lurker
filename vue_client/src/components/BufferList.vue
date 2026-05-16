@@ -54,6 +54,15 @@
               :title="`${buf.highlighted} highlight${buf.highlighted === 1 ? '' : 's'}`"
             >●</span>
             <span v-if="buf.unread > 0" class="badge">{{ unreadLabel(buf.unread) }}</span>
+            <button
+              v-if="!isServerBuffer(buf)"
+              type="button"
+              class="row-actions"
+              title="Actions"
+              aria-label="Buffer actions"
+              @click.stop="onRowActionsClick($event, buf)"
+              @contextmenu.stop.prevent
+            ><i class="fa-solid fa-ellipsis-vertical"></i></button>
           </li>
         </template>
       </draggable>
@@ -87,6 +96,15 @@
             :title="`${buf.highlighted} highlight${buf.highlighted === 1 ? '' : 's'}`"
           >●</span>
           <span v-if="buf.unread > 0" class="badge">{{ unreadLabel(buf.unread) }}</span>
+          <button
+            v-if="!isServerBuffer(buf)"
+            type="button"
+            class="row-actions"
+            title="Actions"
+            aria-label="Buffer actions"
+            @click.stop="onRowActionsClick($event, buf)"
+            @contextmenu.stop.prevent
+          ><i class="fa-solid fa-ellipsis-vertical"></i></button>
         </li>
       </ul>
     </div>
@@ -101,18 +119,16 @@ import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import { useDraftStore } from '../stores/drafts.js';
 import { usePinsStore } from '../stores/pins.js';
-import { useChannelNotifyStore } from '../stores/channelNotify.js';
 import { useNickColors } from '../composables/useNickColors.js';
-import { useContextMenu } from '../composables/useContextMenu.js';
+import { useBufferActions } from '../composables/useBufferActions.js';
 import { isPeerOffline as derivePeerOffline, isPeerAway as derivePeerAway } from '../utils/peerPresence.js';
 
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
 const drafts = useDraftStore();
 const pins = usePinsStore();
-const channelNotify = useChannelNotifyStore();
 const nicks = useNickColors();
-const menu = useContextMenu();
+const bufferActions = useBufferActions();
 
 // Per-network local mirror of the pinned buffer list, kept as concrete buffer
 // objects so vuedraggable can render them directly. We mutate the inner arrays
@@ -232,33 +248,12 @@ function onPinDragEnd(networkId) {
 }
 
 function onBufferContextMenu(e, buf) {
-  if (isServerBuffer(buf)) return;
-  const pinned = pins.isPinned(buf.networkId, buf.target);
-  const items = [
-    pinned
-      ? { label: 'Unpin', icon: 'fa-solid fa-thumbtack-slash', onClick: () => pins.unpin(buf.networkId, buf.target) }
-      : { label: 'Pin', icon: 'fa-solid fa-thumbtack', onClick: () => pins.pin(buf.networkId, buf.target) },
-  ];
-  // Always-notify is a channel-level concept (DMs are blanket-controlled by
-  // the global DM notification setting). Server buffers are filtered out at
-  // the top of this handler.
-  if (buf.target.startsWith('#')) {
-    const isAlwaysNotify = channelNotify.notifyAlways(buf.networkId, buf.target);
-    items.push(
-      isAlwaysNotify
-        ? {
-            label: 'Stop always notifying',
-            icon: 'fa-solid fa-bell-slash',
-            onClick: () => channelNotify.setNotifyAlways(buf.networkId, buf.target, false),
-          }
-        : {
-            label: 'Always notify',
-            icon: 'fa-solid fa-bell',
-            onClick: () => channelNotify.setNotifyAlways(buf.networkId, buf.target, true),
-          },
-    );
-  }
-  menu.open(items, e.clientX, e.clientY);
+  bufferActions.openMenuFor(buf, e.clientX, e.clientY);
+}
+
+// Hover three-dots affordance — opens the same menu anchored to the button.
+function onRowActionsClick(e, buf) {
+  bufferActions.openMenuFromButton(buf, e.currentTarget);
 }
 
 function rowClasses(buf, networkId) {
@@ -360,6 +355,7 @@ function dmTitle(buf) {
   cursor: pointer;
   border-left: 2px solid transparent;
   position: relative;
+  user-select: none;
 }
 /* Tree guide: top-half vertical + horizontal arm. The arm meets the row's
    vertical centerline and stops short of the label, producing ├─ / └─. */
@@ -438,6 +434,35 @@ function dmTitle(buf) {
 .badge.draft {
   color: var(--fg-muted);
   font-size: 0.85em;
+}
+
+/* Hover three-dots: absolute-positioned so it doesn't displace badges on
+   hover-in. Briefly overlays the rightmost badges while the cursor is on
+   the row — that's the moment the user is reaching for the menu, so the
+   badges have already done their job. Background matches the row's hover
+   shade so the overlay reads as part of the row, not floating chrome.
+   Hidden on touch breakpoints; mobile uses the topic-bar cog (channels/
+   DMs) or single-tap (members) instead. */
+.channels .row-actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 4px;
+  background: var(--bg-soft);
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 80ms linear;
+}
+.channels li:hover .row-actions,
+.channels .row-actions:focus-visible { opacity: 1; }
+.channels .row-actions:hover { color: var(--fg); }
+@media (max-width: 768px) {
+  .channels .row-actions { display: none; }
 }
 
 .empty { padding: 12px; color: var(--fg-muted); font-style: italic; }

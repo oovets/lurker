@@ -12,7 +12,7 @@
     @dragleave.prevent="onDragLeave"
     @drop.prevent="onDrop"
   >
-    <span class="prompt">{{ promptLabel }}<span v-if="awayLabel" class="away">&nbsp;{{ awayLabel }}</span>&nbsp;&gt;</span>
+    <span class="prompt"><template v-if="!isMobile">{{ promptLabel }}<span v-if="awayLabel" class="away">&nbsp;{{ awayLabel }}</span>&nbsp;</template>&gt;</span>
     <textarea
       ref="inputEl"
       v-model="text"
@@ -79,6 +79,8 @@ import { chunkCountForSay, chunkCountForAction } from '../utils/messageSplit.js'
 import { buildNickCandidates } from '../utils/nickCompletion.js';
 import NickPicker from './NickPicker.vue';
 import LongMessageUploadModal from './LongMessageUploadModal.vue';
+import { useSelfLabel } from '../composables/useSelfLabel.js';
+import { useViewport } from '../composables/useViewport.js';
 
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
@@ -145,45 +147,13 @@ const systemFeatures = computed(() => {
     autocapitalize: autocorrectOn ? 'sentences' : 'off',
   };
 });
-// IRC channel prefix priority: q > a > o > h > v. The prompt prepends the
-// highest-precedence prefix character we hold in the active channel, so the
-// input area communicates "you're an op here" without a separate segment.
-const PROMPT_PREFIX = { q: '~', a: '&', o: '@', h: '%', v: '+' };
-const PROMPT_PREFIX_RANK = ['q', 'a', 'o', 'h', 'v'];
-
-const channelPrefix = computed(() => {
-  const a = active.value;
-  if (!a || !a.target?.startsWith('#')) return '';
-  const buf = buffer.value;
-  const nick = networks.states[a.networkId]?.nick;
-  if (!buf || !nick) return '';
-  const lc = nick.toLowerCase();
-  const me = (buf.members || []).find((m) => ((m.nick || m).toLowerCase()) === lc);
-  const modes = me && typeof me === 'object' ? (me.modes || []) : [];
-  for (const letter of PROMPT_PREFIX_RANK) {
-    if (modes.includes(letter)) return PROMPT_PREFIX[letter];
-  }
-  return '';
-});
-
-const promptLabel = computed(() => {
-  if (!active.value) return '—';
-  const state = networks.states[active.value.networkId];
-  const nick = state?.nick;
-  if (!nick) return '—';
-  const modes = state?.userModes || '';
-  const parens = modes ? `(${modes})` : '';
-  return `${channelPrefix.value}${nick}${parens}`;
-});
-
-const awayLabel = computed(() => {
-  if (!active.value) return '';
-  // The server keeps `message` populated after /back so the buffer dividers
-  // can render the completed pair — gate on `active` so the prompt label
-  // disappears when the user is no longer away.
-  const away = networks.states[active.value.networkId]?.away;
-  return away?.active && away.message ? `(${away.message})` : '';
-});
+// Prompt identity (nick + channel prefix + user modes) and away marker are
+// shared with the compact status bar — see useSelfLabel. On mobile we don't
+// render the prompt label here at all (the status bar carries it instead);
+// the local computed is gated on !isMobile so we ship just `>` in mobile
+// mode and free the input row for the textarea.
+const { promptLabel, awayLabel } = useSelfLabel();
+const { isMobile } = useViewport();
 
 let typingState = null;
 let lastActiveSentAt = 0;
@@ -1110,11 +1080,4 @@ textarea {
 }
 textarea:focus { outline: none; }
 textarea::placeholder { color: var(--fg-muted); font-style: italic; }
-
-/* iOS Safari auto-zooms when focusing any input with computed font-size
-   below 16px, and the global 14px would otherwise trigger it. Force 16px
-   on mobile widths only — desktop keeps the denser typography. */
-@media (max-width: 768px) {
-  textarea { font-size: 16px; }
-}
 </style>

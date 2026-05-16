@@ -56,6 +56,13 @@
           <i class="fa-regular fa-bell"></i>
         </button>
         <button
+          v-if="showBufferCog"
+          ref="bufferCogBtn"
+          class="icon"
+          title="Buffer actions"
+          @click="openBufferActions"
+        ><i class="fa-solid fa-gear"></i></button>
+        <button
           v-if="isChannel"
           class="icon"
           title="Members"
@@ -107,12 +114,13 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useBuffersStore } from '../stores/buffers.js';
 import { useSocket } from '../composables/useSocket.js';
 import { useVisualViewportHeight } from '../composables/useViewport.js';
 import { useChatBootstrap } from '../composables/useChatBootstrap.js';
 import { useActiveBuffer } from '../composables/useActiveBuffer.js';
+import { useBufferActions } from '../composables/useBufferActions.js';
 import { useToastsStore } from '../stores/toasts.js';
 import BufferList from '../components/BufferList.vue';
 import MessageList from '../components/MessageList.vue';
@@ -127,8 +135,9 @@ import SearchModal from '../components/SearchModal.vue';
 
 const buffers = useBuffersStore();
 const { connected } = useSocket();
-const { active, activeKey, isChannel, isServerBuffer, bufferLabel, topic } = useActiveBuffer();
+const { active, activeKey, activeBuf, isChannel, isServerBuffer, bufferLabel, topic } = useActiveBuffer();
 const toasts = useToastsStore();
+const bufferActions = useBufferActions();
 
 // Pin --viewport-h to the visualViewport height so the shell stays glued to
 // the visible region when the iOS soft keyboard pushes content up.
@@ -146,13 +155,30 @@ const showUploads = ref(false);
 const showSearch = ref(false);
 const pendingScrollId = ref(null);
 const messageInputRef = ref(null);
+const bufferCogBtn = ref(null);
+
+// Server buffers already have a dedicated browse-channels action in the bar;
+// the cog is for channel/DM buffer-level actions (pin, always-notify).
+const showBufferCog = computed(() => !!active.value && !isServerBuffer.value);
+
+function openBufferActions() {
+  if (!activeBuf.value) return;
+  bufferActions.openMenuFromButton(activeBuf.value, bufferCogBtn.value);
+}
 
 // BufferList calls buffers.activate() directly on click; we react to the
 // activeKey flip rather than intercepting the click so the same store state
-// drives both layouts. Only auto-advance from the list — if a remote event
-// changes activeKey while the user is on the members screen, leave them be.
+// drives both layouts. Auto-advance from list (the natural buffer-open
+// flow) AND from members (Send DM out of the nick menu flips activeKey to a
+// new DM buffer — the members screen for the old channel would otherwise be
+// stranded). The buffer screen itself doesn't auto-advance — we let in-
+// buffer activations (e.g. a user explicitly switching) drop the user
+// straight into the new buffer without re-triggering the watcher's screen
+// change since they're already on that screen.
 watch(activeKey, (next) => {
-  if (next && screen.value === 'list') screen.value = 'buffer';
+  if (next && (screen.value === 'list' || screen.value === 'members')) {
+    screen.value = 'buffer';
+  }
 });
 
 // Re-tapping the *same* buffer the user was last in doesn't change activeKey

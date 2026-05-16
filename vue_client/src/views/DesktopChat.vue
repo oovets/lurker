@@ -58,6 +58,13 @@
         ><LinkedText :text="topic" /></button>
       </template>
       <button
+        v-if="showBufferCog"
+        ref="bufferCogBtn"
+        class="link buffer-cog"
+        title="Buffer actions"
+        @click="openBufferActions"
+      ><i class="fa-solid fa-gear"></i></button>
+      <button
         v-if="isChannel"
         class="link members-toggle"
         :title="showMembers ? 'Hide members' : 'Show members'"
@@ -141,6 +148,7 @@ import SearchModal from '../components/SearchModal.vue';
 import KeyboardHelpModal from '../components/KeyboardHelpModal.vue';
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts.js';
 import { useNicklistCollapseStore } from '../stores/nicklistCollapse.js';
+import { useBufferActions } from '../composables/useBufferActions.js';
 
 const buffers = useBuffersStore();
 const { connected } = useSocket();
@@ -148,6 +156,7 @@ const { active, activeBuf, topic, isServerBuffer, isChannel, bufferLabel } = use
 const settings = useSettingsStore();
 const toasts = useToastsStore();
 const nicklistCollapse = useNicklistCollapseStore();
+const bufferActions = useBufferActions();
 
 const showNetworkForm = ref(false);
 const editingNetwork = ref(null);
@@ -160,6 +169,19 @@ const showSearch = ref(false);
 const showKbdHelp = ref(false);
 const pendingScrollId = ref(null);
 const messageInputRef = ref(null);
+const bufferCogBtn = ref(null);
+
+// The cog opens the same menu as right-clicking the sidebar row — exposed
+// here so the actions are reachable for the currently-open buffer without a
+// trip to the sidebar (and so mobile users, who have no right-click, can get
+// at them at all). Server buffers already have dedicated controls in this
+// bar, so the cog is for channels and DMs only.
+const showBufferCog = computed(() => !!active.value && !isServerBuffer.value);
+
+function openBufferActions() {
+  if (!activeBuf.value) return;
+  bufferActions.openMenuFromButton(activeBuf.value, bufferCogBtn.value);
+}
 
 // Any modal open? Type-ahead must not steal focus from a modal's own fields.
 const anyModalOpen = computed(() =>
@@ -391,10 +413,15 @@ useChatBootstrap({ onJump: onJumpToMessage });
 .status-bar   { grid-area: status; }
 .input        { grid-area: input; }
 
-/* Pin the members toggle + count to the far right of the topic bar
-   regardless of what's between them and the buffer label. The topic
-   text shrinks first (it has min-width: 0 + ellipsis) so the pair
-   stays put. Count sits to the right of the icon. */
+/* Pin the right-side cluster (cog / members toggle / count) to the far
+   right of the topic bar regardless of what's between them and the buffer
+   label. The topic text shrinks first (it has min-width: 0 + ellipsis) so
+   the cluster stays put. The cog claims the slack via margin-left:auto and
+   the remaining elements follow it in DOM order. When the cog is absent
+   (server buffers), members-toggle's own margin-left:auto takes over.
+   Count sits to the right of the icon. */
+.topic .buffer-cog { margin-left: auto; padding-left: 8px; }
+.topic .buffer-cog + .members-toggle { margin-left: 0; padding-left: 4px; }
 .topic .members-toggle { margin-left: auto; padding-left: 8px; }
 .topic .member-count {
   color: var(--fg-muted);

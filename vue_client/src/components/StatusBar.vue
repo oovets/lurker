@@ -5,8 +5,9 @@
 
 <template>
   <div v-if="active" class="status-bar" :class="{ compact }">
-    <span class="seg clock">{{ clock }}</span>
-    <span class="seg buffer"><template v-if="targetLabel"><span v-if="networkLabel && !compact" class="net">{{ networkLabel }}/</span><span class="name">{{ targetLabel }}</span></template><span v-else class="name">{{ networkLabel }}</span><span v-if="modeSuffix && !compact" class="modes">{{ modeSuffix }}</span></span>
+    <span v-if="!compact" class="seg clock">{{ clock }}</span>
+    <span v-if="!compact" class="seg buffer"><template v-if="targetLabel"><span v-if="networkLabel" class="net">{{ networkLabel }}/</span><span class="name">{{ targetLabel }}</span></template><span v-else class="name">{{ networkLabel }}</span><span v-if="modeSuffix" class="modes">{{ modeSuffix }}</span></span>
+    <span v-if="compact" class="seg self"><span class="name">{{ promptLabel }}</span><span v-if="awayLabel" class="away">&nbsp;{{ awayLabel }}</span></span>
     <span v-if="peerStatusLabel" class="seg peer-status" :class="peerStatusClass">{{ peerStatusLabel }}</span>
     <span v-if="lagLabel && !compact" class="seg lag" :class="lagClass">{{ lagLabel }}</span>
     <span v-if="uploadLabel" class="seg upload" :class="{ failed: uploads.failedAt }">{{ uploadLabel }}</span>
@@ -25,13 +26,17 @@ import { useUploadsStore } from '../stores/uploads.js';
 import { useNickColors } from '../composables/useNickColors.js';
 import { useScrollState, requestScrollToBottom } from '../composables/useScrollState.js';
 import { useComposing } from '../composables/useComposing.js';
+import { useSelfLabel } from '../composables/useSelfLabel.js';
 import { formatTimestamp } from '../utils/timestamp.js';
 import { isPeerOffline, isPeerAway } from '../utils/peerPresence.js';
 
 defineProps({
-  // Mobile/petite mode: hide the network prefix, mode suffix, lag, and
-  // "new ↓" jump button. Leaves clock | buffer | typing — what fits
-  // legibly on a phone width.
+  // Mobile/petite mode: drops the clock and buffer-name segments entirely
+  // (the buffer name is already in the mobile header, the clock isn't worth
+  // the row), and renders the self identity (nick + channel-prefix + user
+  // modes + away) here instead — freeing the input row to be just `>`,
+  // textarea, and the paperclip. Also hides lag and the "new ↓" jump button
+  // so the typing/split/upload signals stay legible at phone widths.
   compact: { type: Boolean, default: false },
 });
 
@@ -41,6 +46,7 @@ const settings = useSettingsStore();
 const uploads = useUploadsStore();
 const nickColors = useNickColors();
 const composing = useComposing();
+const { promptLabel, awayLabel } = useSelfLabel();
 
 // SPLIT (warn) at 2 chunks, FLOOD (bad) at 3+. Lives just before the typing
 // indicator so heavy composers can see it without taking their eyes off the
@@ -224,6 +230,10 @@ function onJumpToBottom() {
 .seg.buffer .name { color: var(--accent); }
 .seg.buffer .net { color: var(--fg-muted); }
 .seg.buffer .modes { color: var(--fg-muted); }
+/* Mobile-only self identity. Accent for the nick to mirror how the
+   input prompt rendered it on desktop; warn-colored away tail. */
+.seg.self .name { color: var(--accent); }
+.seg.self .away { color: var(--warn); }
 .seg.lag { color: var(--fg-muted); }
 .seg.lag.warn { color: var(--warn); }
 .seg.lag.alarm { color: var(--bad); }
