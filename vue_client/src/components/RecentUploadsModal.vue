@@ -109,6 +109,10 @@ function formatBytes(n) {
 }
 
 .list-wrap {
+  /* Break out of card padding so the scrollbar sits against the card
+     border; padding keeps row content visually aligned with the rest. */
+  margin: 0 calc(-1 * var(--card-pad-x));
+  padding: 0 var(--card-pad-x);
   overflow-y: auto;
   flex: 1;
   min-height: 0;

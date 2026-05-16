@@ -20,6 +20,9 @@
         <button class="icon" title="Recent uploads" @click="showUploads = true">
           <i class="fa-solid fa-paperclip"></i>
         </button>
+        <button class="icon" title="Add network" @click="openAddNetwork">
+          <i class="fa-solid fa-plus"></i>
+        </button>
         <RouterLink class="icon" to="/settings" title="Settings">
           <i class="fa-solid fa-gear"></i>
         </RouterLink>
@@ -178,6 +181,11 @@ const showBufferCog = computed(() => !!active.value && !isServerBuffer.value);
 function openBufferActions() {
   if (!activeBuf.value) return;
   bufferActions.openMenuFromButton(activeBuf.value, bufferCogBtn.value);
+}
+
+function openAddNetwork() {
+  editingNetwork.value = null;
+  showNetworkForm.value = true;
 }
 
 function editActiveNetwork() {

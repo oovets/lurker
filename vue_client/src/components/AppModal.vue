@@ -28,7 +28,7 @@
 
     <div
       class="card"
-      :class="[`size-${size}`, { 'no-border': noBorder }]"
+      :class="[`size-${size}`]"
       tabindex="-1"
       ref="cardEl"
     >
@@ -72,7 +72,6 @@ const props = defineProps({
   },
   closeOnBackdrop: { type: Boolean, default: true },
   closeTitle: { type: String, default: 'close' },
-  noBorder: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['close']);
@@ -110,8 +109,12 @@ onMounted(() => {
 .modal.align-center { align-items: center; }
 .modal.align-top {
   align-items: flex-start;
-  padding-top: 12vh;
+  padding-top: 2vh;
 }
+/* Match the 2vh top so a fully-tall card has equal breathing room
+   above and below. Default .card max-height: 85vh would otherwise
+   leave a ~13vh gap at the bottom. */
+.modal.align-top .card { max-height: 96vh; }
 
 /* On mobile every modal becomes a full-screen sheet — the card fills the
    viewport so the title is glued to the top and the body extends to the
@@ -140,7 +143,13 @@ onMounted(() => {
   max-height: 85vh;
   display: flex;
   flex-direction: column;
-  background: transparent;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  /* Card horizontal padding lives in a custom property so scrolling
+     children can break out with margin: 0 calc(-1 * var(--card-pad-x))
+     and have their scrollbar sit against the card border. */
+  --card-pad-x: 28px;
+  padding: 24px var(--card-pad-x);
   outline: none;
 }
 .card.size-sm { width: min(520px, 92vw); }

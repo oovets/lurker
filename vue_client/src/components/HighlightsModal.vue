@@ -4,7 +4,7 @@
 -->
 
 <template>
-  <AppModal word="highlights" title="highlights" size="lg" @close="$emit('close')">
+  <AppModal word="highlights" title="highlights" size="lg" align="top" @close="$emit('close')">
     <template #actions>
       <button
         class="link sound-toggle"
@@ -17,20 +17,12 @@
 
     <p v-if="store.error" class="error inline">{{ store.error }}</p>
     <ul v-if="visibleItems.length" class="match-list">
-      <li
+      <HistoryMessageRow
         v-for="m in visibleItems"
         :key="`${m.networkId}::${m.target}::${m.id}`"
-        class="match"
-        @click="onJump(m)"
-      >
-        <span class="time">{{ time(m.time) }}</span>
-        <span class="loc">
-          <span class="net">{{ m.networkName || networkName(m.networkId) }}</span>
-          <span class="target">{{ targetLabel(m) }}</span>
-        </span>
-        <span class="nick" :style="nickStyle(m)">{{ m.nick }}</span>
-        <span class="text">{{ m.text }}</span>
-      </li>
+        :message="m"
+        @jump="onJump"
+      />
     </ul>
     <p v-else-if="store.loading" class="empty">Loading…</p>
     <p v-else-if="store.items.length" class="empty">All highlights are from ignored users.</p>
@@ -48,26 +40,21 @@
 <script setup>
 import { computed, onMounted } from 'vue';
 import AppModal from './AppModal.vue';
-import { useNetworksStore } from '../stores/networks.js';
+import HistoryMessageRow from './HistoryMessageRow.vue';
 import { useSettingsStore } from '../stores/settings.js';
 import { useHighlightsStore } from '../stores/highlights.js';
 import { useIgnoresStore } from '../stores/ignores.js';
-import { useNickColors } from '../composables/useNickColors.js';
-import { formatTimestamp } from '../utils/timestamp.js';
 
 const emit = defineEmits(['close', 'jump']);
 
-const networks = useNetworksStore();
 const settings = useSettingsStore();
 const store = useHighlightsStore();
 const ignores = useIgnoresStore();
-const nicks = useNickColors();
 
 const visibleItems = computed(() =>
   store.items.filter((m) => !ignores.isIgnored(m.networkId, m.nick, m.userhost))
 );
 
-const tsFormat = computed(() => settings.effective('look.buffer.time_format'));
 const soundEnabled = computed(() => !!settings.effective('notifications.highlight.sound.enabled'));
 
 async function toggleSound() {
@@ -79,24 +66,6 @@ async function toggleSound() {
 onMounted(() => {
   store.loadInitial();
 });
-
-function time(iso) {
-  return formatTimestamp(iso, tsFormat.value);
-}
-
-function networkName(id) {
-  return networks.networks.find((n) => n.id === id)?.name || `net:${id}`;
-}
-
-function targetLabel(m) {
-  if (m.target && m.target.startsWith(':server:')) return '[server]';
-  return m.target;
-}
-
-function nickStyle(m) {
-  const c = nicks.color(m.nick);
-  return c ? { color: c } : null;
-}
 
 function onJump(m) {
   emit('jump', { networkId: m.networkId, target: m.target, messageId: m.id });
@@ -119,30 +88,13 @@ function onJump(m) {
 
 .match-list {
   list-style: none;
-  margin: 0;
-  padding: 0;
+  /* Break out of card padding so the scrollbar sits against the card
+     border; padding keeps row content visually aligned with the rest. */
+  margin: 0 calc(-1 * var(--card-pad-x));
+  padding: 0 var(--card-pad-x);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
-}
-.match {
-  display: grid;
-  grid-template-columns: max-content max-content max-content 1fr;
-  gap: 8px;
-  align-items: baseline;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-}
-.match:hover { background: var(--bg-soft); }
-
-.time { color: var(--fg-muted); }
-.loc { color: var(--fg-muted); display: flex; gap: 4px; }
-.loc .net { color: var(--accent); }
-.nick { font-weight: 600; }
-.text {
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 .empty {
   text-align: center;
