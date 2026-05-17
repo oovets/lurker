@@ -216,7 +216,7 @@ export const REGISTRY = Object.freeze([
     category: 'appearance',
     group: 'messages',
     type: 'bool',
-    default: false,
+    default: true,
     description:
       'Hide the timestamp on consecutive rows that would display the exact ' +
       'same time string (driven by look.buffer.time_format). Reduces visual ' +
