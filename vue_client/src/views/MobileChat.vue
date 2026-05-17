@@ -135,7 +135,6 @@ import { useVisualViewportHeight } from '../composables/useViewport.js';
 import { useChatBootstrap } from '../composables/useChatBootstrap.js';
 import { useActiveBuffer } from '../composables/useActiveBuffer.js';
 import { useBufferActions } from '../composables/useBufferActions.js';
-import { useToastsStore } from '../stores/toasts.js';
 import BufferList from '../components/BufferList.vue';
 import MessageList from '../components/MessageList.vue';
 import MessageInput from '../components/MessageInput.vue';
@@ -147,11 +146,11 @@ import TopicModal from '../components/TopicModal.vue';
 import ChannelListModal from '../components/ChannelListModal.vue';
 import RecentUploadsModal from '../components/RecentUploadsModal.vue';
 import SearchModal from '../components/SearchModal.vue';
+import { useJumpToMessage } from '../composables/useJumpToMessage.js';
 
 const buffers = useBuffersStore();
 const { connected } = useSocket();
 const { active, activeKey, activeBuf, isChannel, isServerBuffer, bufferLabel, topic } = useActiveBuffer();
-const toasts = useToastsStore();
 const bufferActions = useBufferActions();
 
 // Pin --viewport-h to the visualViewport height so the shell stays glued to
@@ -230,18 +229,13 @@ function goList() {
   screen.value = 'list';
 }
 
-function onJumpToMessage({ networkId, target, messageId }) {
-  // A notification can outlive its buffer — if the channel was closed since
-  // the push fired, activating would recreate an empty shell. Bail with a
-  // toast instead of stranding the UI in a half-state.
-  if (!buffers.isOpen(networkId, target)) {
-    toasts.push({ kind: 'info', title: 'Buffer is closed', ttlMs: 4000 });
-    return;
-  }
-  buffers.activate(networkId, target);
-  pendingScrollId.value = messageId;
-  screen.value = 'buffer';
-}
+const onJumpToMessage = useJumpToMessage({
+  pendingScrollId,
+  // Mobile shell stacks list → buffer → members. Tapping a search result or
+  // notification needs to forward us onto the buffer screen so the message
+  // we just jumped to is actually visible.
+  afterActivate: () => { screen.value = 'buffer'; },
+});
 
 useChatBootstrap({ onJump: onJumpToMessage });
 </script>

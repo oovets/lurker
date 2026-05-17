@@ -9,7 +9,7 @@
          user's view during a history fetch, shifting scrollTop and either
          throwing off the prepend anchor math or (with browser anchoring)
          leaving scrollTop near the top so maybeRequestHistory cascades. -->
-    <div v-if="!buffer?.hasMore && messages.length" class="notice">— start of history —</div>
+    <div v-if="!buffer?.hasMoreOlder && messages.length" class="notice">— start of history —</div>
     <p v-if="!messages.length" class="notice empty">No messages yet.</p>
     <template v-for="row in renderRows" :key="row.key">
     <div v-if="row.divider === 'unread'" class="notice unread-divider">— unread —</div>
@@ -478,7 +478,7 @@ function segHasStyle(seg) { return segmentHasStyle(seg); }
 function requestMoreHistory() {
   const buf = buffer.value;
   if (!buf) return;
-  if (!buf.hasMore || buf.loadingHistory) return;
+  if (!buf.hasMoreOlder || buf.loadingHistory) return;
   if (buf.target.startsWith(':server:')) return;
   const before = buf.oldestId ?? buf.messages[0]?.id;
   // Without an anchor id, the server interprets `before` as "latest" and
@@ -496,11 +496,53 @@ function requestMoreHistory() {
   });
 }
 
+// Detached-only downward pager. Fires when the user scrolls toward the
+// bottom of a historical slice; the server's 'after' mode ships the next
+// page of newer events, which appendHistory tacks onto the tail. While
+// live, the bottom edge IS the live tail, so there's nothing to fetch
+// (and hasMoreNewer is false anyway).
+function requestNewerHistory() {
+  const buf = buffer.value;
+  if (!buf) return;
+  if (!buf.detached || !buf.hasMoreNewer || buf.loadingHistory) return;
+  if (buf.target.startsWith(':server:')) return;
+  const afterId = buf.newestId ?? buf.messages[buf.messages.length - 1]?.id;
+  if (!afterId) return;
+  buffers.setLoadingHistory(buf.networkId, buf.target, true);
+  socketSend({
+    type: 'history',
+    mode: 'after',
+    networkId: buf.networkId,
+    target: buf.target,
+    afterId,
+    limit: 100,
+  });
+}
+
 function maybeRequestHistory() {
   const el = scroller.value;
   if (!el) return;
   if (el.scrollTop > 80) return;
   requestMoreHistory();
+}
+
+function maybeRequestNewer() {
+  const el = scroller.value;
+  if (!el) return;
+  if (el.scrollHeight - el.scrollTop - el.clientHeight > 80) return;
+  const buf = buffer.value;
+  if (!buf || !buf.detached || buf.loadingHistory) return;
+  if (buf.target.startsWith(':server:')) return;
+  if (buf.hasMoreNewer) {
+    requestNewerHistory();
+    return;
+  }
+  // Caught up: paged through to the bottom of the slice with nothing newer
+  // server-side as of our last fetch. Auto-reattach so the buffer rejoins
+  // live (also picks up anything that arrived during the detach via the
+  // 'latest' refetch) and the StatusBar "Return to present" button
+  // disappears without the user having to tap it.
+  buffers.reattachToLive(buf.networkId, buf.target);
 }
 
 // Fetch more history if the buffer's content doesn't fill the viewport.
@@ -551,6 +593,10 @@ function onScroll() {
   pendingHistoryTimer = setTimeout(() => {
     pendingHistoryTimer = null;
     maybeRequestHistory();
+    // Same debounce window also covers the downward pager so a fast scroll
+    // through the slice can't fire both edges concurrently. The function
+    // is a no-op for non-detached buffers.
+    maybeRequestNewer();
   }, 150);
 }
 
@@ -636,8 +682,19 @@ watch(
     // and the previous tail is gone — distinct from a cap-evicting append,
     // which shifts both ends but keeps the tail (see `appended` above).
     const replaced = firstChanged && lastChanged && !appended;
+    const isDetached = !!buffer.value?.detached;
     await nextTick();
     if (replaced) {
+      if (isDetached) {
+        // Detached slice landed (loadAround response). The pendingScrollId
+        // watcher will center the anchor row with scrollIntoView; don't
+        // pre-empt that with a snap-to-bottom. Mark not-stuck so live state
+        // doesn't try to pull us forward.
+        stickToBottom.value = false;
+        setStuckToBottom(false);
+        ensureViewportFilled();
+        return;
+      }
       stickToBottom.value = true;
       resetScrollState();
       scrollToBottom();
@@ -651,7 +708,13 @@ watch(
     // newly-arrived tail is from an ignored sender; the user wouldn't see
     // it scrolling into view anyway, and "1 new ↓" pointing at nothing is
     // confusing.
-    if (appended) {
+    //
+    // Pager-driven appends (mode='after' response while detached) share this
+    // shape — same `appended` test passes. We let them through without any
+    // scroll adjustment: content was added below the viewport, the user's
+    // current scrollTop still points at the row they were reading, and
+    // bumpNewBelow would be misleading since these aren't live events.
+    if (appended && !isDetached) {
       if (stickToBottom.value) scrollToBottom();
       else {
         const tail = messages.value[messages.value.length - 1];

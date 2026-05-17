@@ -13,7 +13,7 @@ import { matchesAny as matchesIgnoreMask } from './maskMatch.js';
 import { listMasks as listIgnoredMasks } from '../db/ignoredMasks.js';
 import { findSession } from '../db/sessions.js';
 import { findUserById, touchUserLastSeen } from '../db/users.js';
-import { listMessages, listBufferTargets, listSpeakers, countNewer, countHighlightsNewer, maxIdByBuffer, searchMessages, COUNTABLE_TYPES } from '../db/messages.js';
+import { listMessages, listMessagesAround, hasOlderRow, hasNewerRow, listBufferTargets, listSpeakers, countNewer, countHighlightsNewer, maxIdByBuffer, searchMessages, COUNTABLE_TYPES } from '../db/messages.js';
 import { listReadStateForUser, getReadState, setReadState } from '../db/bufferReads.js';
 import { addEntry as addInputHistory, listRecent as listRecentInputHistory } from '../db/inputHistory.js';
 import {
@@ -904,19 +904,102 @@ export function attachWsHub(httpServer, sessionSecret) {
           break;
         }
         const limit = Math.min(Math.max(Number(msg.limit) || 100, 1), 500);
-        const events = listMessages(msg.networkId, msg.target, {
-          before: msg.before ? Number(msg.before) : undefined,
-          limit,
-        }).map((e) => decorateMessage(userId, e));
+        const mode = typeof msg.mode === 'string' ? msg.mode : 'before';
+        const token = msg.token ?? null;
         const speakers = listSpeakers(msg.networkId, msg.target);
-        send(ws, {
+        const baseReply = {
           kind: 'history',
           networkId: msg.networkId,
           target: msg.target,
+          mode,
+          token,
+          speakers,
+        };
+
+        if (mode === 'around') {
+          // Detached jump path. The DB lookup enforces (networkId, target);
+          // we reject :server: pseudo-buffers up front since they don't carry
+          // jumpable per-message anchors.
+          if (typeof msg.target === 'string' && msg.target.startsWith(':server:')) {
+            send(ws, { kind: 'error', text: 'cannot jump in server buffer' });
+            break;
+          }
+          const anchorId = Number(msg.anchorId);
+          if (!Number.isInteger(anchorId) || anchorId <= 0) {
+            send(ws, { kind: 'error', text: 'invalid anchorId' });
+            break;
+          }
+          // halfLimit caps each side at the request's limit (default 100,
+          // clamped 1..500). Total slice length tops out at 2*limit + 1.
+          const halfLimit = limit;
+          const slice = listMessagesAround(msg.networkId, msg.target, anchorId, halfLimit);
+          const events = slice.events.map((e) => decorateMessage(userId, e));
+          send(ws, {
+            ...baseReply,
+            anchorId,
+            events,
+            hasMoreOlder: slice.hasMoreOlder,
+            hasMoreNewer: slice.hasMoreNewer,
+            anchorMissing: !!slice.anchorMissing,
+            // Back-compat with any existing 'before'-mode reader.
+            hasMore: slice.hasMoreOlder,
+            before: null,
+          });
+          break;
+        }
+
+        if (mode === 'after') {
+          const afterId = Number(msg.afterId);
+          if (!Number.isInteger(afterId) || afterId < 0) {
+            send(ws, { kind: 'error', text: 'invalid afterId' });
+            break;
+          }
+          const events = listMessages(msg.networkId, msg.target, { afterId, limit })
+            .map((e) => decorateMessage(userId, e));
+          const newestId = events.length ? events[events.length - 1].id : afterId;
+          send(ws, {
+            ...baseReply,
+            afterId,
+            events,
+            hasMoreNewer: hasNewerRow(msg.networkId, msg.target, newestId),
+            hasMoreOlder: true, // caller already had older context; unchanged.
+            hasMore: true,
+            before: null,
+          });
+          break;
+        }
+
+        if (mode === 'latest') {
+          // Return-to-present reattach. Equivalent to the implicit initial
+          // backlog (`limit` rows, newest, no `before`); ships hasMoreOlder so
+          // the client can resume upward paging cleanly.
+          const events = listMessages(msg.networkId, msg.target, { limit })
+            .map((e) => decorateMessage(userId, e));
+          const oldestId = events.length ? events[0].id : 0;
+          send(ws, {
+            ...baseReply,
+            events,
+            hasMoreOlder: oldestId > 0 && hasOlderRow(msg.networkId, msg.target, oldestId),
+            hasMoreNewer: false,
+            hasMore: oldestId > 0 && hasOlderRow(msg.networkId, msg.target, oldestId),
+            before: null,
+          });
+          break;
+        }
+
+        // 'before' (default, legacy). Reply keeps the historical `hasMore`
+        // field set to hasMoreOlder so older clients keep working.
+        const before = msg.before ? Number(msg.before) : undefined;
+        const events = listMessages(msg.networkId, msg.target, { before, limit })
+          .map((e) => decorateMessage(userId, e));
+        const hasMoreOlder = events.length === limit;
+        send(ws, {
+          ...baseReply,
           before: msg.before || null,
           events,
-          hasMore: events.length === limit,
-          speakers,
+          hasMoreOlder,
+          hasMoreNewer: false,
+          hasMore: hasMoreOlder,
         });
         break;
       }

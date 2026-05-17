@@ -11,6 +11,13 @@ const TYPING_DURATIONS = { active: 6000, paused: 30000 };
 
 const typingTimers = new Map();
 
+// Monotonic token tagged onto each loadAround / reattachToLive request. The
+// response handler drops slices whose token has been superseded (e.g. user
+// clicked a second jump while the first was in flight, or reattached before
+// the around-response landed). Mirrors search.js's `token` pattern.
+let historyTokenCounter = 0;
+function nextHistoryToken() { historyTokenCounter += 1; return historyTokenCounter; }
+
 function key(networkId, target) {
   return `${networkId}::${target}`;
 }
@@ -54,9 +61,34 @@ function ensureBuffer(state, networkId, target) {
       dividerAfterId: null,
       typing: {},
       oldestId: null,
-      hasMore: true,
+      // Symmetric to oldestId. Only authoritative while detached or mid-page-
+      // down — otherwise messages[length-1].id is the implicit "newest" and
+      // this is left null. Set on around/after/latest responses.
+      newestId: null,
+      // Split of the old `hasMore` flag. hasMoreOlder drives the existing
+      // upward pager; hasMoreNewer is only meaningful while detached or while
+      // the user has paged past the live tail (not currently possible
+      // outside detach mode, but the field is here for future symmetry).
+      hasMoreOlder: true,
+      hasMoreNewer: false,
       loadingHistory: false,
       speakers: {},
+      // Detached mode: buffer is viewing a bounded historical slice around
+      // some anchor message id rather than the live tail. While detached,
+      // pushMessage drops fanOut (and counts via liveDuringDetach), activate
+      // skips its mark-read advance, and replaceBacklog (snapshot resume)
+      // is a no-op. The user exits via the StatusBar "Return to present"
+      // button (reattachToLive), via switching to another buffer, or via WS
+      // reconnect — all three reset the flag.
+      detached: false,
+      liveDuringDetach: 0,
+      pendingHistoryToken: null,
+      // Set when the buffer's slice was wiped on switch-away from detach.
+      // activate() consumes it on re-entry to fire a fresh latest fetch, so
+      // the user doesn't sit on a permanently empty buffer (the server only
+      // ships backlog unsolicited via sendSnapshot, so there's no other
+      // automatic source of history once the slice has been wiped).
+      pendingRefetch: false,
     };
   }
   return state.buffers[k];
@@ -83,6 +115,16 @@ export const useBuffersStore = defineStore('buffers', {
     pushMessage(event) {
       if (!event.target) return false;
       const buf = ensureBuffer(this, event.networkId, event.target);
+      // Detached: the user is reading a historical slice that doesn't include
+      // the live tail. Drop the event so nothing materializes inside the
+      // slice, and bump the badge so the StatusBar "Return to present" button
+      // can surface a hint that fresh activity has happened. The caller's
+      // unread/highlight side effects still fire — those are buffer-state
+      // counts, independent of whether we render the row right now.
+      if (buf.detached) {
+        buf.liveDuringDetach += 1;
+        return false;
+      }
       const prevMaxId = buf.messages[buf.messages.length - 1]?.id ?? 0;
       // Server inserts persisted events in id order per buffer, so any event
       // with id <= prevMaxId is a replay (e.g. a WS resume that overlapped
@@ -128,6 +170,19 @@ export const useBuffersStore = defineStore('buffers', {
     },
     replaceBacklog(networkId, target, events, speakers, readState, joined) {
       const buf = ensureBuffer(this, networkId, target);
+      // Detached: snapshot resume during detach is a no-op. The gap-fill
+      // events would land at id values inside or past the detached slice and
+      // either corrupt its boundaries or get conflated with paged-in history.
+      // Reattach (via the "Return to present" button) is always a fresh
+      // full-fetch via reattachToLive, so we don't need the data here.
+      // Speakers / readState / joined still apply (they're slice-independent
+      // buffer-level state).
+      if (buf.detached) {
+        if (speakers !== undefined) this.seedSpeakers(networkId, target, speakers);
+        if (readState) this.applyReadState(networkId, target, readState);
+        if (typeof joined === 'boolean') buf.joined = joined;
+        return;
+      }
       // Drop legacy per-buffer away/back rows. The server stopped persisting
       // these once self-presence moved to the away-state stream, but rows
       // written before that change linger in the DB and would still render
@@ -138,7 +193,7 @@ export const useBuffersStore = defineStore('buffers', {
         // Initial seed (first connect, or a brand-new buffer we hadn't seen
         // pre-flap). Take the backlog wholesale.
         buf.messages = filtered.slice(-MAX_PER_BUFFER);
-        buf.hasMore = filtered.length >= 50;
+        buf.hasMoreOlder = filtered.length >= 50;
       } else {
         // Gap-fill on reconnect: filter to events newer than what we already
         // have and append. Keeps live state intact when the server's backlog
@@ -156,7 +211,7 @@ export const useBuffersStore = defineStore('buffers', {
       if (readState) this.applyReadState(networkId, target, readState);
       if (typeof joined === 'boolean') buf.joined = joined;
     },
-    prependHistory(networkId, target, events, hasMore, speakers) {
+    prependHistory(networkId, target, events, hasMoreOlder, speakers) {
       const buf = ensureBuffer(this, networkId, target);
       // Dedupe against ids we already hold AND drop legacy away/back rows
       // (no longer persisted; same rationale as replaceBacklog).
@@ -171,9 +226,152 @@ export const useBuffersStore = defineStore('buffers', {
       buf.messages = [...fresh, ...buf.messages];
       const first = buf.messages[0];
       buf.oldestId = first?.id ?? buf.oldestId;
-      buf.hasMore = !!hasMore;
+      buf.hasMoreOlder = !!hasMoreOlder;
       buf.loadingHistory = false;
       if (speakers !== undefined) this.seedSpeakers(networkId, target, speakers);
+    },
+    // Symmetric to prependHistory but appends. Used by the 'after' mode
+    // pager that fires while detached when the user scrolls toward the
+    // bottom edge of the loaded slice. The MAX_PER_BUFFER cap evicts from
+    // the OLDER edge — the user is reading downward, so the newer rows are
+    // the ones we want to keep resident.
+    appendHistory(networkId, target, events, hasMoreNewer, speakers) {
+      const buf = ensureBuffer(this, networkId, target);
+      const existing = new Set();
+      for (const m of buf.messages) {
+        if (m.id != null) existing.add(m.id);
+      }
+      const fresh = events.filter((e) =>
+        (e.id == null || !existing.has(e.id))
+        && e.type !== 'away' && e.type !== 'back',
+      );
+      const combined = [...buf.messages, ...fresh];
+      buf.messages = combined.length > MAX_PER_BUFFER
+        ? combined.slice(combined.length - MAX_PER_BUFFER)
+        : combined;
+      buf.oldestId = buf.messages[0]?.id ?? buf.oldestId;
+      buf.newestId = buf.messages[buf.messages.length - 1]?.id ?? buf.newestId;
+      buf.hasMoreNewer = !!hasMoreNewer;
+      buf.loadingHistory = false;
+      if (speakers !== undefined) this.seedSpeakers(networkId, target, speakers);
+    },
+    // Jump-to-message entry point. Synchronously flips the buffer into
+    // detached mode before the WS send so that any live fanOut arriving
+    // between the request and its response is dropped by pushMessage rather
+    // than leaking into the soon-to-be-replaced slice. The token is matched
+    // by applyAroundSlice — a second loadAround (or a reattach) before the
+    // first response lands mints a new token, so the stale response is
+    // discarded on arrival.
+    loadAround(networkId, target, anchorId, halfLimit = 100) {
+      const buf = ensureBuffer(this, networkId, target);
+      const token = nextHistoryToken();
+      buf.detached = true;
+      buf.pendingHistoryToken = token;
+      buf.loadingHistory = true;
+      socketSend({
+        type: 'history',
+        mode: 'around',
+        networkId,
+        target,
+        anchorId,
+        token,
+        limit: halfLimit,
+      });
+    },
+    // Token-guarded replace for the 'around' response. A mismatched token
+    // means a fresher request superseded this one — drop the stale slice
+    // entirely; the in-flight winner will land soon.
+    applyAroundSlice(networkId, target, payload) {
+      const buf = ensureBuffer(this, networkId, target);
+      if (payload.token !== buf.pendingHistoryToken) return;
+      const filtered = (payload.events || []).filter(
+        (e) => e.type !== 'away' && e.type !== 'back',
+      );
+      buf.messages = filtered.slice(-MAX_PER_BUFFER);
+      buf.oldestId = buf.messages[0]?.id ?? null;
+      buf.newestId = buf.messages[buf.messages.length - 1]?.id ?? null;
+      buf.hasMoreOlder = !!payload.hasMoreOlder;
+      buf.hasMoreNewer = !!payload.hasMoreNewer;
+      buf.pendingHistoryToken = null;
+      buf.loadingHistory = false;
+    },
+    // Snap back to the live tail. Sent by the StatusBar "Return to present"
+    // button. Same token discipline as loadAround — detached stays true
+    // until the response lands, so any fanOut between request and response
+    // continues to be dropped by pushMessage.
+    reattachToLive(networkId, target, limit = 200) {
+      const buf = ensureBuffer(this, networkId, target);
+      // No detached guard: this is also called by activate() to refetch
+      // the live tail after a switch-away from a detached buffer wiped
+      // the slice. In that case detached is already false. The applyLatestReplace
+      // handler is idempotent (re-clearing already-clear flags is a no-op).
+      if (buf.loadingHistory) return;
+      const token = nextHistoryToken();
+      buf.pendingHistoryToken = token;
+      buf.loadingHistory = true;
+      socketSend({
+        type: 'history',
+        mode: 'latest',
+        networkId,
+        target,
+        token,
+        limit,
+      });
+    },
+    applyLatestReplace(networkId, target, payload) {
+      const buf = ensureBuffer(this, networkId, target);
+      if (payload.token !== buf.pendingHistoryToken) return;
+      const filtered = (payload.events || []).filter(
+        (e) => e.type !== 'away' && e.type !== 'back',
+      );
+      buf.messages = filtered.slice(-MAX_PER_BUFFER);
+      buf.oldestId = buf.messages[0]?.id ?? null;
+      buf.newestId = buf.messages[buf.messages.length - 1]?.id ?? null;
+      buf.hasMoreOlder = !!payload.hasMoreOlder;
+      buf.hasMoreNewer = false;
+      buf.detached = false;
+      buf.liveDuringDetach = 0;
+      buf.pendingHistoryToken = null;
+      buf.loadingHistory = false;
+      // We're back on live: advance the read pointer to the new tail in the
+      // same way activate() does on focus-in. Server clamps with MAX(), so
+      // sending mark-read against the latest known id is idempotent.
+      const lastMsg = buf.messages[buf.messages.length - 1];
+      const lastId = lastMsg?.id ?? 0;
+      if (lastId > buf.lastReadId) {
+        buf.lastReadId = lastId;
+        socketSend({
+          type: 'mark-read',
+          networkId,
+          target,
+          messageId: lastId,
+        });
+      }
+    },
+    // Drop detached state without re-fetching. Called when the user switches
+    // buffers (the prev buffer's slice becomes stale; re-entry should reseed
+    // from snapshot) and on WS reconnect (the resume snapshot will reseed
+    // cleanly, but only if we let replaceBacklog through — which means
+    // detached has to be cleared first).
+    clearDetached(networkId, target, { wipeMessages = false } = {}) {
+      const buf = this.buffers[key(networkId, target)];
+      if (!buf || !buf.detached) return;
+      buf.detached = false;
+      buf.liveDuringDetach = 0;
+      buf.pendingHistoryToken = null;
+      buf.hasMoreNewer = false;
+      buf.newestId = null;
+      buf.loadingHistory = false;
+      if (wipeMessages) {
+        buf.messages = [];
+        buf.oldestId = null;
+        buf.hasMoreOlder = true;
+        // Mark so the next activate() of this buffer re-pulls the live
+        // tail. Without this flag, the user would return to an empty
+        // buffer and the only path to repopulate it would be a full
+        // reconnect-triggered snapshot.
+        buf.pendingRefetch = true;
+      }
     },
     setLoadingHistory(networkId, target, loading) {
       const buf = ensureBuffer(this, networkId, target);
@@ -302,6 +500,13 @@ export const useBuffersStore = defineStore('buffers', {
           prev.unread = 0;
           prev.highlighted = 0;
           prev.highlightsCapped = false;
+          // Carrying a detached slice across buffer switches gets weird fast
+          // (the user can't see the detach status on a buffer they aren't
+          // viewing, the live counter ticks invisibly, the next entry has
+          // to remember whether to render the slice or live). Drop it and
+          // wipe the slice on switch-away — re-entry then reseeds from
+          // snapshot or the next history fetch as if it were fresh.
+          if (prev.detached) this.clearDetached(prev.networkId, prev.target, { wipeMessages: true });
         }
       }
       networks.setActive(networkId, target);
@@ -318,16 +523,30 @@ export const useBuffersStore = defineStore('buffers', {
       // newer than lastReadId. The optimistic local bump prevents a fast
       // re-activate from re-snapshotting an out-of-date divider before
       // the server's read-state echo lands.
-      const lastMsg = buf.messages[buf.messages.length - 1];
-      const lastId = lastMsg?.id ?? 0;
-      if (lastId > buf.lastReadId) {
-        buf.lastReadId = lastId;
-        socketSend({
-          type: 'mark-read',
-          networkId,
-          target,
-          messageId: lastId,
-        });
+      //
+      // Skip while detached — the visible "tail" is some historical row,
+      // not the live present. Marking up to that row would advance the
+      // server's read pointer past messages the user hasn't seen.
+      if (!buf.detached) {
+        const lastMsg = buf.messages[buf.messages.length - 1];
+        const lastId = lastMsg?.id ?? 0;
+        if (lastId > buf.lastReadId) {
+          buf.lastReadId = lastId;
+          socketSend({
+            type: 'mark-read',
+            networkId,
+            target,
+            messageId: lastId,
+          });
+        }
+      }
+      // Re-entry after the slice was wiped on switch-away-from-detached.
+      // Fire a fresh latest fetch so the user lands on live tail content
+      // instead of an empty buffer. The applyLatestReplace response will
+      // do its own mark-read against the new tail.
+      if (buf.pendingRefetch) {
+        buf.pendingRefetch = false;
+        this.reattachToLive(networkId, target);
       }
       // For DMs, ask the server to WHOIS-probe the peer so the banner/sidebar
       // dim reflect current state rather than a possibly-stale cached value.

@@ -27,6 +27,13 @@ export const useSearchStore = defineStore('search', {
     // True once a search has actually been dispatched, so the modal can tell
     // "no matches" apart from "haven't searched yet".
     searched: false,
+    // Persist the modal's scroll position and keyboard cursor across
+    // open/close. Tapping a result jumps to a buffer and closes the modal;
+    // reopening should put the user back exactly where they were so a series
+    // of "search → reference → close → reopen → next result" reads feels
+    // continuous. Reset by runSearch() — a brand-new query starts fresh.
+    scrollTop: 0,
+    selectedIndex: 0,
   }),
   actions: {
     setQuery(raw) {
@@ -59,6 +66,8 @@ export const useSearchStore = defineStore('search', {
       this.hasMore = false;
       this.nextBefore = null;
       this.error = '';
+      this.scrollTop = 0;
+      this.selectedIndex = 0;
       const payload = this._buildPayload(null);
       if (!payload) {
         this.loading = false;
@@ -107,6 +116,8 @@ export const useSearchStore = defineStore('search', {
       this.loading = false;
       this.error = '';
       this.searched = false;
+      this.scrollTop = 0;
+      this.selectedIndex = 0;
     },
   },
 });

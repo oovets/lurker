@@ -62,7 +62,10 @@ const visibleResults = computed(() =>
 
 const inputEl = ref(null);
 const listEl = ref(null);
-const selected = ref(0);
+// Hydrated from the store on mount so a closed-then-reopened modal lands
+// on the same row the user was last on. Mirrored back into the store on
+// unmount.
+const selected = ref(store.selectedIndex);
 
 // Local mirror of the store's raw query so we can debounce dispatch without
 // debouncing the text field itself.
@@ -75,9 +78,16 @@ watch(queryInput, (val) => {
 });
 
 // Reset the keyboard cursor whenever the visible result set is replaced
-// (a fresh search), but leave it alone on pagination appends.
+// (a fresh search), but leave it alone on pagination appends. Clamp to
+// in-range when the set shrinks (e.g. a result becomes ignored) so the
+// restored selectedIndex never points past the end.
 watch(() => visibleResults.value.length, (len, prev) => {
+  if (len === 0) {
+    selected.value = 0;
+    return;
+  }
   if (len < prev || prev === 0) selected.value = 0;
+  if (selected.value >= len) selected.value = len - 1;
 });
 
 function onJump(m) {
@@ -126,10 +136,21 @@ onMounted(() => {
     inputEl.value?.focus();
     inputEl.value?.select();
   }, 0);
+  // Restore the scroll position after the list has rendered. The cursor was
+  // already seeded from the store via the `selected` ref's initial value.
+  nextTick(() => {
+    const el = listEl.value;
+    if (el && store.scrollTop > 0) el.scrollTop = store.scrollTop;
+  });
 });
 
 onBeforeUnmount(() => {
   if (debounceTimer) clearTimeout(debounceTimer);
+  // Persist DOM-only state back to the store so the next open restores it.
+  // The Pinia store already keeps query, results, hasMore, nextBefore, and
+  // searched across opens; this rounds out the user-perceived "where I was".
+  store.scrollTop = listEl.value?.scrollTop || 0;
+  store.selectedIndex = selected.value;
 });
 </script>
 

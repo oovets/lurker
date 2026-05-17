@@ -89,6 +89,54 @@ export function listMessages(networkId, target, { before, afterId, limit = 50 } 
   return rows.map(rowToEvent).reverse();
 }
 
+// Bounded context window around an arbitrary message id. Used by the
+// jump-to-message UX (search results, highlights) — loads halfLimit older rows
+// + the anchor + halfLimit newer rows. The anchor lookup also enforces
+// (networkId, target) so callers can't lift rows out of buffers they don't own
+// just by knowing a message id. Returns oldest-first.
+export function listMessagesAround(networkId, target, anchorId, halfLimit = 100) {
+  const anchorRow = db.prepare(
+    `SELECT * FROM messages WHERE id = ? AND network_id = ? AND target = ?`
+  ).get(anchorId, networkId, target);
+  if (!anchorRow) {
+    return { events: [], hasMoreOlder: false, hasMoreNewer: false, anchorMissing: true };
+  }
+  const older = listMessages(networkId, target, { before: anchorId, limit: halfLimit });
+  const newer = listMessages(networkId, target, { afterId: anchorId, limit: halfLimit });
+  const events = [...older, rowToEvent(anchorRow), ...newer];
+  const oldestId = events[0].id;
+  const newestId = events[events.length - 1].id;
+  return {
+    events,
+    hasMoreOlder: hasOlderThan(networkId, target, oldestId),
+    hasMoreNewer: hasNewerThan(networkId, target, newestId),
+  };
+}
+
+// Cheap edge-exists probes for the around/before/after handlers. Using a
+// LIMIT 1 EXISTS-shaped query (rather than COUNT(*)) keeps this O(index seek)
+// regardless of how much history is in the buffer.
+function hasOlderThan(networkId, target, id) {
+  return !!db.prepare(
+    `SELECT 1 FROM messages WHERE network_id = ? AND target = ? AND id < ? LIMIT 1`
+  ).get(networkId, target, id);
+}
+
+function hasNewerThan(networkId, target, id) {
+  return !!db.prepare(
+    `SELECT 1 FROM messages WHERE network_id = ? AND target = ? AND id > ? LIMIT 1`
+  ).get(networkId, target, id);
+}
+
+// Public wrappers so wsHub can compute hasMoreOlder/Newer for the 'before',
+// 'after', and 'latest' modes without re-declaring the SQL there.
+export function hasOlderRow(networkId, target, id) {
+  return hasOlderThan(networkId, target, id);
+}
+export function hasNewerRow(networkId, target, id) {
+  return hasNewerThan(networkId, target, id);
+}
+
 export function listRecentForBuffers(networkId, targets, perBuffer = 50) {
   const out = {};
   for (const t of targets) {

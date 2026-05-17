@@ -236,10 +236,28 @@ function handleMessage(raw) {
     return;
   }
   if (payload.kind === 'history') {
-    // History pages are *older* events than what we already have — they
-    // shouldn't advance the resume cursor.
+    // 'around' / 'latest' / 'after' / 'before' (default). The detached jump
+    // path replaces the slice; reattach replaces too; 'after' appends paged
+    // forward; legacy 'before' prepends paged backward. All use the same
+    // 'history' kind — disambiguated by `mode`.
     const buffers = useBuffersStore();
-    buffers.prependHistory(payload.networkId, payload.target, payload.events, payload.hasMore, payload.speakers);
+    const mode = payload.mode || 'before';
+    if (mode === 'around') {
+      buffers.applyAroundSlice(payload.networkId, payload.target, payload);
+    } else if (mode === 'latest') {
+      buffers.applyLatestReplace(payload.networkId, payload.target, payload);
+    } else if (mode === 'after') {
+      buffers.appendHistory(
+        payload.networkId, payload.target, payload.events, payload.hasMoreNewer, payload.speakers,
+      );
+    } else {
+      // 'before' or absent — historical legacy path. Pages of older events
+      // don't advance the resume cursor; the existing prependHistory writes
+      // hasMoreOlder under the new field name and consumes either field for
+      // back-compat with server response shapes.
+      const hasMoreOlder = payload.hasMoreOlder != null ? payload.hasMoreOlder : payload.hasMore;
+      buffers.prependHistory(payload.networkId, payload.target, payload.events, hasMoreOlder, payload.speakers);
+    }
     return;
   }
   if (payload.kind === 'irc') {
@@ -353,6 +371,21 @@ function open() {
   socket = new WebSocket(wsUrl());
   socket.onopen = () => {
     connected.value = true;
+    // Detached buffers won't survive a reconnect cleanly — the incoming
+    // snapshot/backlog would otherwise be short-circuited by replaceBacklog's
+    // detached guard, leaving the slice stale and the buffer cut off from
+    // live. Drop the detach (and wipe each slice) before any server message
+    // can arrive on the new socket so the snapshot reseeds them as live.
+    // Synchronous: messages from the new socket arrive on later event-loop
+    // turns, so the reseed sees the cleared state.
+    try {
+      const buffers = useBuffersStore();
+      for (const buf of buffers.list) {
+        if (buf.detached) {
+          buffers.clearDetached(buf.networkId, buf.target, { wipeMessages: true });
+        }
+      }
+    } catch (_) { /* store not yet initialized; nothing to clear */ }
     for (const handler of openHandlers) {
       try { handler(); } catch (_) { /* ignore */ }
     }

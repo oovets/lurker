@@ -131,7 +131,6 @@ import { useSocket } from '../composables/useSocket.js';
 import { useChatBootstrap } from '../composables/useChatBootstrap.js';
 import { useActiveBuffer } from '../composables/useActiveBuffer.js';
 import { useSettingsStore } from '../stores/settings.js';
-import { useToastsStore } from '../stores/toasts.js';
 import BufferList from '../components/BufferList.vue';
 import MessageList from '../components/MessageList.vue';
 import MessageInput from '../components/MessageInput.vue';
@@ -149,12 +148,12 @@ import KeyboardHelpModal from '../components/KeyboardHelpModal.vue';
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts.js';
 import { useNicklistCollapseStore } from '../stores/nicklistCollapse.js';
 import { useBufferActions } from '../composables/useBufferActions.js';
+import { useJumpToMessage } from '../composables/useJumpToMessage.js';
 
 const buffers = useBuffersStore();
 const { connected } = useSocket();
 const { active, activeBuf, topic, isServerBuffer, isChannel, bufferLabel } = useActiveBuffer();
 const settings = useSettingsStore();
-const toasts = useToastsStore();
 const nicklistCollapse = useNicklistCollapseStore();
 const bufferActions = useBufferActions();
 
@@ -244,17 +243,7 @@ function onChatClick(e) {
   messageInputRef.value?.focus();
 }
 
-function onJumpToMessage({ networkId, target, messageId }) {
-  // A notification can outlive its buffer — if the channel was closed since
-  // the push fired, activating would recreate an empty shell. Bail with a
-  // toast instead of stranding the UI in a half-state.
-  if (!buffers.isOpen(networkId, target)) {
-    toasts.push({ kind: 'info', title: 'Buffer is closed', ttlMs: 4000 });
-    return;
-  }
-  buffers.activate(networkId, target);
-  pendingScrollId.value = messageId;
-}
+const onJumpToMessage = useJumpToMessage({ pendingScrollId });
 
 function openAddNetwork() {
   editingNetwork.value = null;

@@ -8,6 +8,13 @@
     <span v-if="!compact" class="seg clock">{{ clock }}</span>
     <span v-if="!compact" class="seg buffer"><template v-if="targetLabel"><span v-if="networkLabel" class="net">{{ networkLabel }}/</span><span class="name">{{ targetLabel }}</span></template><span v-else class="name">{{ networkLabel }}</span><span v-if="modeSuffix" class="modes">{{ modeSuffix }}</span></span>
     <span v-if="compact" class="seg self"><span class="name">{{ promptLabel }}</span><span v-if="awayLabel" class="away">&nbsp;{{ awayLabel }}</span></span>
+    <!-- Detached-jump indicator. Sits adjacent to the self/nick segment on
+         compact (mobile) per agreed placement, where it's the only exit
+         from a detached buffer back to live. On desktop seg.self is hidden,
+         so this lands right after the buffer name — also a natural spot.
+         Unlike [N new ↓] (which is hidden on compact), this button renders
+         in both modes. -->
+    <button v-if="detached" class="seg return-present" type="button" @click="onReturnToPresent">Return to present<template v-if="liveDuringDetach > 0"> ({{ liveDuringDetach }} new)</template> ↓</button>
     <span v-if="peerStatusLabel" class="seg peer-status" :class="peerStatusClass">{{ peerStatusLabel }}</span>
     <span v-if="lagLabel && !compact" class="seg lag" :class="lagClass">{{ lagLabel }}</span>
     <span v-if="uploadLabel" class="seg upload" :class="{ failed: uploads.failedAt }">{{ uploadLabel }}</span>
@@ -204,6 +211,21 @@ const clock = computed(() => formatTimestamp(now.value.toISOString(), tsFormat.v
 function onJumpToBottom() {
   requestScrollToBottom();
 }
+
+const detached = computed(() => !!buffer.value?.detached);
+const liveDuringDetach = computed(() => buffer.value?.liveDuringDetach || 0);
+
+function onReturnToPresent() {
+  const buf = buffer.value;
+  if (!buf) return;
+  buffers.reattachToLive(buf.networkId, buf.target);
+  // The reattach response will replace messages and trip the wholesale-
+  // replace branch in MessageList's watcher (which snaps to bottom and
+  // resets stickToBottom). The explicit token here is belt-and-suspenders:
+  // if the response is slow, the user clicking again still requests a
+  // bottom snap once the slice eventually lands.
+  requestScrollToBottom();
+}
 </script>
 
 <style scoped>
@@ -244,7 +266,8 @@ function onJumpToBottom() {
 .seg.split { font-weight: 600; letter-spacing: 0.05em; }
 .seg.split.warn { color: var(--warn); }
 .seg.split.bad { color: var(--bad); }
-.seg.jump {
+.seg.jump,
+.seg.return-present {
   background: none;
   border: none;
   color: var(--warn);
@@ -252,5 +275,6 @@ function onJumpToBottom() {
   padding: 0;
   cursor: pointer;
 }
-.seg.jump:hover { color: var(--fg); }
+.seg.jump:hover,
+.seg.return-present:hover { color: var(--fg); }
 </style>

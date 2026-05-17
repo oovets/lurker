@@ -13,12 +13,13 @@ let createUser;
 let createNetwork;
 let insertMessage;
 let listMessages;
+let listMessagesAround;
 let searchMessages;
 
 beforeAll(async () => {
   ({ createUser } = await import('./users.js'));
   ({ createNetwork } = await import('./networks.js'));
-  ({ insertMessage, listMessages, searchMessages } = await import('./messages.js'));
+  ({ insertMessage, listMessages, listMessagesAround, searchMessages } = await import('./messages.js'));
 });
 
 afterAll(() => {
@@ -259,6 +260,84 @@ describe('searchMessages', () => {
     chat(net.id, '#a', 'alice', 'banana split');
     const hits = searchMessages(user.id, { query: 'banana' });
     expect(hits[0].networkName).toBe('OFTC');
+  });
+});
+
+describe('listMessagesAround', () => {
+  it('centers a slice on the anchor with hasMore=false when total fits in halfLimit', () => {
+    const user = createUser('around-fits');
+    const net = createNetwork(user.id, {
+      name: 'n', host: 'h', port: 6697, tls: true, nick: 'around-fits',
+    });
+    const ids = [];
+    for (let i = 1; i <= 101; i += 1) ids.push(chat(net.id, '#a', 'alice', `m${i}`).id);
+    const anchorId = ids[50]; // 51st insert, 50 older + 50 newer
+
+    const slice = listMessagesAround(net.id, '#a', anchorId, 100);
+    expect(slice.events.length).toBe(101);
+    expect(slice.events[50].id).toBe(anchorId);
+    expect(slice.hasMoreOlder).toBe(false);
+    expect(slice.hasMoreNewer).toBe(false);
+  });
+
+  it('truncates to halfLimit on each side with both hasMore flags true', () => {
+    const user = createUser('around-trunc');
+    const net = createNetwork(user.id, {
+      name: 'n', host: 'h', port: 6697, tls: true, nick: 'around-trunc',
+    });
+    const ids = [];
+    for (let i = 1; i <= 1001; i += 1) ids.push(chat(net.id, '#a', 'alice', `m${i}`).id);
+    const anchorId = ids[500];
+
+    const slice = listMessagesAround(net.id, '#a', anchorId, 100);
+    expect(slice.events.length).toBe(201);
+    expect(slice.events[100].id).toBe(anchorId);
+    expect(slice.hasMoreOlder).toBe(true);
+    expect(slice.hasMoreNewer).toBe(true);
+  });
+
+  it('returns hasMoreOlder=false when the anchor is the oldest message', () => {
+    const user = createUser('around-top');
+    const net = createNetwork(user.id, {
+      name: 'n', host: 'h', port: 6697, tls: true, nick: 'around-top',
+    });
+    const ids = [];
+    for (let i = 1; i <= 100; i += 1) ids.push(chat(net.id, '#a', 'alice', `m${i}`).id);
+    const anchorId = ids[0];
+
+    const slice = listMessagesAround(net.id, '#a', anchorId, 100);
+    expect(slice.events[0].id).toBe(anchorId);
+    expect(slice.events.length).toBe(100); // 0 older + anchor + 99 newer
+    expect(slice.hasMoreOlder).toBe(false);
+    expect(slice.hasMoreNewer).toBe(false);
+  });
+
+  it('returns anchorMissing when the id does not exist in the buffer', () => {
+    const user = createUser('around-missing');
+    const net = createNetwork(user.id, {
+      name: 'n', host: 'h', port: 6697, tls: true, nick: 'around-missing',
+    });
+    chat(net.id, '#a', 'alice', 'one');
+
+    const slice = listMessagesAround(net.id, '#a', 9999999, 100);
+    expect(slice.anchorMissing).toBe(true);
+    expect(slice.events).toEqual([]);
+  });
+
+  it('refuses to lift a row out of a buffer the caller did not name', () => {
+    // Anchor exists in #a but the caller asks for it scoped to #b. The
+    // (network_id, target) guard on the anchor lookup is the access boundary
+    // here — without it, knowing any message id would expose its content via
+    // jump-to-message regardless of which buffer was queried.
+    const user = createUser('around-scope');
+    const net = createNetwork(user.id, {
+      name: 'n', host: 'h', port: 6697, tls: true, nick: 'around-scope',
+    });
+    const aId = chat(net.id, '#a', 'alice', 'private').id;
+    chat(net.id, '#b', 'bob', 'unrelated');
+
+    const slice = listMessagesAround(net.id, '#b', aId, 100);
+    expect(slice.anchorMissing).toBe(true);
   });
 });
 
