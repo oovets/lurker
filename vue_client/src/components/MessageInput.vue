@@ -203,6 +203,9 @@ const longMessageUploading = ref(false);
 // signal "no split risk".
 function bodyForSplit(text) {
   if (!text) return { body: '', isAction: false };
+  // // escape: `//foo` is a literal `/foo` message, not a command, so it does
+  // pass through PRIVMSG and is subject to the splitter.
+  if (text.startsWith('//')) return { body: text.slice(1), isAction: false };
   if (text[0] !== '/') return { body: text, isAction: false };
   const m = text.match(/^\/(\w+)\s*(.*)$/s);
   if (!m) return { body: '', isAction: false };
@@ -817,7 +820,10 @@ async function submit() {
   }
   pendingSplitConfirm = false;
 
-  if (raw.startsWith('/')) {
+  // `//foo` escapes the slash and sends literal `/foo` as a normal message.
+  // History keeps the typed `//foo` form so up-arrow round-trips identically.
+  const escapedSlash = raw.startsWith('//');
+  if (raw.startsWith('/') && !escapedSlash) {
     // Slash commands cover a lot of ground (joins, raws, /me, etc.). Treat
     // /me with the same ACK path as a normal send since it visibly fans out
     // as a chat message; the rest stay best-effort but at least bail out
@@ -831,7 +837,8 @@ async function submit() {
 
   if (!sendable.value) return;
 
-  const pending = socketSendWithAck({ type: 'send', networkId, target, text: raw });
+  const wireText = escapedSlash ? raw.slice(1) : raw;
+  const pending = socketSendWithAck({ type: 'send', networkId, target, text: wireText });
   if (!pending) {
     // Socket isn't open — don't clear the input, don't pollute history. The
     // user can edit and retry, or wait for the auto-reconnect.
@@ -905,12 +912,14 @@ const HELP_LINES = [
   '  /topic [text]          — set/clear topic on current channel',
   '  /nick <newnick>        — change your nick',
   '  /quit [reason]         — disconnect from current network',
+  '  /reconnect             — reconnect to current network',
   '  /list                  — list channels on current network',
   '  /jitsi                 — start a video call (alias: /talk)',
   '  /ignore [mask]         — list current ignores, or add (nick or nick!user@host)',
   '  /unignore <mask>       — remove an ignore entry',
   '  /raw <line>            — send a raw IRC line (alias: /quote)',
   '  /help                  — this list',
+  '  //text                 — send literal "/text" as a message (escape)',
 ];
 
 function isChannelTarget(t) {
@@ -1049,6 +1058,13 @@ function handleCommand(line, networkId, target) {
       });
       return true;
     }
+    case 'reconnect':
+      // restartNetwork is idempotent: it works whether the network is still
+      // connected, mid-reconnect, or fully stopped after /quit.
+      networks.reconnect(networkId).catch((err) => {
+        localInfo(networkId, target, `/reconnect failed: ${err.message || 'could not reconnect'}`);
+      });
+      return true;
     case 'list':
       return sendOrToast({ type: 'raw', networkId, line: argLine ? `LIST ${argLine}` : 'LIST' }, line);
     case 'ignore': {
