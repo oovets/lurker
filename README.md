@@ -24,6 +24,7 @@ Lurker runs as an always-on server that stays connected to IRC on your behalf, k
 
 - `<cfuser> amiantos: holy shit, you made something better than irccloud`
 - `<amigojapan> great, now that amiantos's chat client is catching up to IRC cloud, I think I can switch to it as my daily driver`
+- `<skdoo> amiantos makes cool shit`
 
 # Stack
 - **Server** — Express, `irc-framework`, `ws`, `better-sqlite3`, `sharp`, `web-push`
