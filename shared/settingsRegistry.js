@@ -1100,6 +1100,7 @@ export const CATEGORIES = Object.freeze([
   { id: 'users',         label: 'Users',         kind: 'bespoke', adminOnly: true },
   { id: 'networks',      label: 'Networks',      kind: 'bespoke'  },
   { id: 'account',       label: 'Account',       kind: 'bespoke'  },
+  { id: 'data',          label: 'Data',          kind: 'bespoke'  },
   { id: 'about',         label: 'About',         kind: 'bespoke'  },
 ]);
 

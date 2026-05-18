@@ -54,6 +54,7 @@ import IgnoresPane from '../components/settings-panes/IgnoresPane.vue';
 import UsersPane from '../components/settings-panes/UsersPane.vue';
 import NetworksPane from '../components/settings-panes/NetworksPane.vue';
 import AccountPane from '../components/settings-panes/AccountPane.vue';
+import DataPane from '../components/settings-panes/DataPane.vue';
 import AboutPane from '../components/settings-panes/AboutPane.vue';
 
 useSocket();
@@ -75,6 +76,7 @@ const BESPOKE_PANES = {
   users: UsersPane,
   networks: NetworksPane,
   account: AccountPane,
+  data: DataPane,
   about: AboutPane,
 };
 
