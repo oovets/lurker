@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Elastic-2.0
 
 # Stage 1: Build Vue client
-FROM node:lts-slim AS vue-builder
+FROM node:22-slim AS vue-builder
 
 WORKDIR /app/vue_client
 
@@ -23,7 +23,11 @@ RUN npm run build
 # instead of compiling from source. Compiling native modules under QEMU when
 # multi-arch building on a single-arch GHA runner is glacial (or hangs
 # outright), and the prebuild path sidesteps it entirely.
-FROM node:lts-slim AS server-deps
+#
+# Pinned to node:22 specifically (rather than lts) because better-sqlite3
+# 11.x ships prebuilds for Node 22 but not Node 24 (which the lts tag
+# currently resolves to). Bump when better-sqlite3 catches up.
+FROM node:22-slim AS server-deps
 
 WORKDIR /app
 
@@ -31,7 +35,7 @@ COPY package*.json ./
 RUN npm install --omit=dev
 
 # Stage 3: Runtime image
-FROM node:lts-slim
+FROM node:22-slim
 
 WORKDIR /app
 
