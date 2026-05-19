@@ -22,6 +22,7 @@ import draftsRouter from './routes/drafts.js';
 import { exportsRouter, importRouter } from './routes/exports.js';
 import ircManager from './services/ircManager.js';
 import { attachWsHub } from './services/wsHub.js';
+import './services/verbs/index.js';
 import systemLog from './services/systemLog.js';
 import { purgeExpiredSessions } from './db/sessions.js';
 import { resolveSessionSecret } from './utils/sessionSecret.js';

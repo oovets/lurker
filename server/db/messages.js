@@ -152,6 +152,24 @@ export function listBufferTargets(networkId) {
     .map((r) => r.target);
 }
 
+// Per-(network, target) summary for the MCP list_buffers verb. Aggregates
+// every target that has at least one message, with the freshest message
+// timestamp. Pseudo-buffers (':server:*') are filtered at the SQL layer so
+// they never leak into the agent-facing surface; clients reach them via the
+// snapshot only.
+export function listBuffersForNetwork(networkId) {
+  return db
+    .prepare(
+      `SELECT target, MAX(time) AS lastMessageAt
+         FROM messages
+        WHERE network_id = ?
+          AND target NOT LIKE ':server:%'
+        GROUP BY target
+        ORDER BY lastMessageAt DESC`
+    )
+    .all(networkId);
+}
+
 // (target, max_id) per buffer in this network. Used by /mark-all-read so the
 // server can clamp every buffer's read pointer to its tail in one pass.
 export function maxIdByBuffer(networkId) {

@@ -14,7 +14,7 @@ import { matchesAny as matchesIgnoreMask } from './maskMatch.js';
 import { listMasks as listIgnoredMasks } from '../db/ignoredMasks.js';
 import { findSession } from '../db/sessions.js';
 import { findUserById, touchUserLastSeen } from '../db/users.js';
-import { listMessages, listMessagesAround, hasOlderRow, hasNewerRow, listBufferTargets, listSpeakers, countNewer, countHighlightsNewer, maxIdByBuffer, searchMessages, COUNTABLE_TYPES } from '../db/messages.js';
+import { listMessages, listMessagesAround, hasOlderRow, hasNewerRow, listBufferTargets, listSpeakers, countNewer, countHighlightsNewer, maxIdByBuffer, COUNTABLE_TYPES } from '../db/messages.js';
 import { listReadStateForUser, getReadState, setReadState } from '../db/bufferReads.js';
 import { addEntry as addInputHistory, listRecent as listRecentInputHistory } from '../db/inputHistory.js';
 import {
@@ -41,6 +41,7 @@ import * as chanlistDb from '../db/chanlist.js';
 import { getUserSettings } from '../db/settings.js';
 import { defaultsAsObject } from './settingsRegistry.js';
 import { SESSION_COOKIE } from '../middleware/auth.js';
+import { callVerb } from './verbRegistry.js';
 
 function effectiveSetting(userId, key) {
   const overrides = getUserSettings(userId);
@@ -150,7 +151,7 @@ function isDirect(event) {
 // wire so clients can route toast/sound per signal type; `notify` is the
 // union and is the single gate consulted by push delivery and the in-client
 // notifier.
-function decorateMessage(userId, event) {
+export function decorateMessage(userId, event) {
   if (!event || typeof event !== 'object') return event;
   const matched = !!event.matched;
   const matchedRuleId = event.matchedRuleId ?? null;
@@ -175,9 +176,43 @@ function computeUnreadFor(userId, networkId, target, lastReadId) {
   };
 }
 
+// Per-user socket bookkeeping lives at module scope so the verb registry can
+// reach into fanOut without importing the WSS instance. The state is still
+// owned by attachWsHub at runtime (it's the only writer to socketsByUser via
+// addSocket/removeSocket); the registry just reads through it.
+const socketsByUser = new Map();
+
+function send(ws, payload) {
+  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+}
+
+function fanOut(userId, payload, opts = {}) {
+  const set = socketsByUser.get(userId);
+  if (!set) return;
+  const json = JSON.stringify(payload);
+  const eventId = typeof payload.id === 'number' ? payload.id : null;
+  for (const ws of set) {
+    if (opts.exceptWs && ws === opts.exceptWs) continue;
+    if (ws.readyState === ws.OPEN) {
+      ws.send(json);
+      // Advance the per-socket cursor so a subsequent sendSnapshot ships
+      // only the gap newer than what this socket has already received.
+      if (eventId != null && eventId > (ws.sinceId || 0)) {
+        ws.sinceId = eventId;
+      }
+    }
+  }
+}
+
+// Public alias for verb handlers that produce a value via MCP but still want
+// the user's open WS tabs to react (e.g. set_nick_note). Same signature as
+// the private fanOut; named to make the cross-module call site read clearly.
+export function fanOutToUser(userId, payload, opts = {}) {
+  fanOut(userId, payload, opts);
+}
+
 export function attachWsHub(httpServer, sessionSecret) {
   const wss = new WebSocketServer({ noServer: true });
-  const socketsByUser = new Map();
   // Per-user pending auto-away timers. Set when a user goes from 1→0 sockets;
   // cleared on 0→1 or when the timer fires.
   const autoAwayTimers = new Map();
@@ -236,28 +271,6 @@ export function attachWsHub(httpServer, sessionSecret) {
     if (set.size === 0) {
       socketsByUser.delete(userId);
       scheduleAutoAway(userId);
-    }
-  }
-
-  function send(ws, payload) {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
-  }
-
-  function fanOut(userId, payload, opts = {}) {
-    const set = socketsByUser.get(userId);
-    if (!set) return;
-    const json = JSON.stringify(payload);
-    const eventId = typeof payload.id === 'number' ? payload.id : null;
-    for (const ws of set) {
-      if (opts.exceptWs && ws === opts.exceptWs) continue;
-      if (ws.readyState === ws.OPEN) {
-        ws.send(json);
-        // Advance the per-socket cursor so a subsequent sendSnapshot ships
-        // only the gap newer than what this socket has already received.
-        if (eventId != null && eventId > (ws.sinceId || 0)) {
-          ws.sinceId = eventId;
-        }
-      }
     }
   }
 
@@ -654,17 +667,25 @@ export function attachWsHub(httpServer, sessionSecret) {
       case 'presence':
         ws.presence = { visible: !!msg.visible };
         break;
-      case 'send': {
-        const ok = ircManager.send(userId, msg.networkId, msg.target, msg.text);
-        if (msg.clientId) {
-          send(ws, { kind: 'send-result', clientId: msg.clientId, ok, error: ok ? undefined : 'not-connected' });
-        }
-        break;
-      }
+      case 'send':
       case 'action': {
-        const ok = ircManager.action(userId, msg.networkId, msg.target, msg.text);
+        // Both share the same shape and the same WS-only echo on clientId.
+        // The verb returns { ok, error? }; we translate to send-result on
+        // behalf of the originating tab so its optimistic bubble can resolve.
+        const verbName = msg.type === 'send' ? 'send_message' : 'send_action';
+        let result;
+        try {
+          result = callVerb(verbName, { userId, scope: 'read-write', transport: 'ws' }, {
+            networkId: msg.networkId, target: msg.target, text: msg.text,
+          });
+        } catch (err) {
+          result = { ok: false, error: err.code || 'error' };
+        }
         if (msg.clientId) {
-          send(ws, { kind: 'send-result', clientId: msg.clientId, ok, error: ok ? undefined : 'not-connected' });
+          send(ws, {
+            kind: 'send-result', clientId: msg.clientId,
+            ok: !!result.ok, error: result.ok ? undefined : result.error,
+          });
         }
         break;
       }
@@ -912,21 +933,14 @@ export function attachWsHub(httpServer, sessionSecret) {
         break;
       }
       case 'set-nick-note': {
-        const networkId = Number(msg.networkId);
-        const nick = typeof msg.nick === 'string' ? msg.nick.trim() : '';
-        // Notes are operator scratch space — cap at 4 KB so a misclick can't
-        // wedge unbounded payloads through the WS. Empty body deletes the row.
-        const rawNote = typeof msg.note === 'string' ? msg.note : '';
-        const note = rawNote.length > 4096 ? rawNote.slice(0, 4096) : rawNote;
-        if (!networkId || !nick) break;
-        const saved = ircManager.setNickNote(userId, networkId, nick, note);
-        fanOut(userId, {
-          kind: 'nick-note-updated',
-          networkId,
-          nick,
-          note: saved ? saved.note : '',
-          updatedAt: saved ? saved.updatedAt : null,
-        });
+        // Verb owns the 4 KB cap, the empty-string-deletes rule, and the
+        // fanOut to other open tabs. WS handler is now a thin delegator —
+        // identical behavior whether the change came from this tab or MCP.
+        try {
+          callVerb('set_nick_note', { userId, scope: 'read-write', transport: 'ws' }, {
+            networkId: msg.networkId, nick: msg.nick, note: msg.note,
+          });
+        } catch (_) { /* boundary already filtered bad networkId; ignore */ }
         break;
       }
       case 'set-bookmark': {
@@ -1061,42 +1075,53 @@ export function attachWsHub(httpServer, sessionSecret) {
           break;
         }
 
-        // 'before' (default, legacy). Reply keeps the historical `hasMore`
-        // field set to hasMoreOlder so older clients keep working.
+        // 'before' (default, legacy). Delegates to the recent_messages verb —
+        // shared with MCP — and wraps the value in the WS history reply shape
+        // (mode/token/speakers + historical hasMore alias).
         const before = msg.before ? Number(msg.before) : undefined;
-        const events = listMessages(msg.networkId, msg.target, { before, limit })
-          .map((e) => decorateMessage(userId, e));
-        const hasMoreOlder = events.length === limit;
+        let result;
+        try {
+          result = callVerb('recent_messages', { userId, scope: 'read-write', transport: 'ws' }, {
+            networkId: msg.networkId, target: msg.target, before, limit,
+          });
+        } catch (_) {
+          send(ws, { kind: 'error', text: 'history fetch failed' });
+          break;
+        }
         send(ws, {
           ...baseReply,
           before: msg.before || null,
-          events,
-          hasMoreOlder,
+          events: result.messages,
+          hasMoreOlder: result.hasOlder,
           hasMoreNewer: false,
-          hasMore: hasMoreOlder,
+          hasMore: result.hasOlder,
         });
         break;
       }
       case 'search': {
-        // Full-text message search. The networkId boundary guard above already
-        // validated ownership when a network filter is present; searchMessages
-        // scopes the global case to the caller's own networks via the networks
-        // join, so no extra access-control check is needed here.
-        const limit = Math.min(Math.max(Number(msg.limit) || 50, 1), 100);
-        const results = searchMessages(userId, {
-          query: typeof msg.query === 'string' ? msg.query : '',
-          networkId: msg.networkId || undefined,
-          target: typeof msg.target === 'string' && msg.target ? msg.target : undefined,
-          nick: typeof msg.nick === 'string' && msg.nick ? msg.nick : undefined,
-          before: msg.before ? Number(msg.before) : undefined,
-          limit,
-        }).map((e) => decorateMessage(userId, e));
+        // Delegates to the search_messages verb. The boundary check above
+        // already validated networkId ownership when a network filter was
+        // present; searchMessages itself self-scopes the global case to the
+        // caller's networks via its SQL join.
+        let result;
+        try {
+          result = callVerb('search_messages', { userId, scope: 'read-write', transport: 'ws' }, {
+            query: msg.query,
+            networkId: msg.networkId || undefined,
+            target: typeof msg.target === 'string' && msg.target ? msg.target : undefined,
+            nick: typeof msg.nick === 'string' && msg.nick ? msg.nick : undefined,
+            before: msg.before ? Number(msg.before) : undefined,
+            limit: msg.limit,
+          });
+        } catch (_) {
+          send(ws, { kind: 'error', text: 'search failed' });
+          break;
+        }
         send(ws, {
           kind: 'search-result',
-          // Echoed so the client can drop results for a superseded query.
           token: msg.token ?? null,
-          results,
-          hasMore: results.length === limit,
+          results: result.messages,
+          hasMore: result.hasMore,
           before: msg.before || null,
         });
         break;
