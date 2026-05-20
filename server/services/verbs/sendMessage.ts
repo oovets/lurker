@@ -33,8 +33,7 @@ registerVerb({
     const target = typeof input.target === 'string' ? input.target : '';
     const text = typeof input.text === 'string' ? input.text : '';
     if (!target || !text) return { ok: false, error: 'empty-target-or-text' };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ok = (ircManager as any).send(ctx.userId, networkId, target, text) as boolean;
+    const ok = ircManager.send(ctx.userId, networkId, target, text);
     return ok ? { ok: true } : { ok: false, error: 'not-connected' };
   },
 });

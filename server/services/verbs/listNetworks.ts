@@ -23,8 +23,7 @@ registerVerb({
   },
   handler(ctx: VerbContext, _input: Record<string, unknown>) {
     return listNetworksForUser(ctx.userId).map((net) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const conn = ircManager.getConnection(ctx.userId, net.id) as any;
+      const conn = ircManager.getConnection(ctx.userId, net.id);
       return {
         id: net.id,
         name: net.name,

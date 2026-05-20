@@ -38,11 +38,7 @@ registerVerb({
     }
     const raw = typeof input.note === 'string' ? input.note : '';
     const note = raw.length > 4096 ? raw.slice(0, 4096) : raw;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const saved = (ircManager as any).setNickNote(ctx.userId, networkId, nick, note) as {
-      note: string;
-      updatedAt: string;
-    } | null;
+    const saved = ircManager.setNickNote(ctx.userId, networkId, nick, note);
     const result = {
       networkId,
       nick,
