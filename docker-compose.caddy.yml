@@ -1,0 +1,45 @@
+# Copyright (c) 2026 Brad Root
+# SPDX-License-Identifier: Elastic-2.0
+#
+# Caddy overlay — fronts Lurker with an automatic-HTTPS reverse proxy.
+#
+# Layer it on top of the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Requires a `.env` file beside this compose defining LURKER_DOMAIN (and,
+# optionally, ACME_EMAIL), plus the Caddyfile from this repo's deploy/
+# directory saved next to it. Caddy obtains a Let's Encrypt certificate for
+# LURKER_DOMAIN automatically — the domain must already resolve to this host.
+#
+# deploy/digitalocean-cloud-init.sh wires all of this up unattended; see the
+# "Deploy on DigitalOcean" section of the README.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: lurker-caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      # Caddy substitutes these into the Caddyfile's {$VAR} placeholders.
+      LURKER_DOMAIN: ${LURKER_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@${LURKER_DOMAIN}}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - lurker
+
+  lurker:
+    # Caddy reverse-proxies to Lurker over the internal Compose network, so
+    # the base file's `8015:8015` host binding is dropped here — Lurker is
+    # then reachable only through Caddy, i.e. only over HTTPS.
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

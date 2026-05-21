@@ -66,6 +66,8 @@ Lurker is a single-user-per-account always-on IRC client — most operators want
 - Works behind CGNAT, on a residential network, or anywhere with outbound HTTPS
 - Free for personal use
 
+> **Starting from a blank VPS?** If you don't already have a host, the [one-shot DigitalOcean deploy](README.md#deploy-on-digitalocean-one-shot) brings up a fresh droplet with Lurker and automatic HTTPS (via Caddy) from a single pasted script — no SSH, no manual Docker install. The rest of this section covers exposing an instance you're already running.
+
 ### Setup
 
 1. **Own a domain on Cloudflare.** You don't need to buy one through Cloudflare, but the DNS does need to be managed there. (Cloudflare's free plan is fine.)

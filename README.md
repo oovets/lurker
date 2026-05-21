@@ -44,6 +44,17 @@ docker compose up -d
 
 Then open <http://localhost:8015> and create your admin account. Username + password is the default; passkeys are optional. See [SELF_HOSTING.md](SELF_HOSTING.md) for the full guide — reverse proxy + HTTPS, enabling passkeys, push notifications, updating, and backups.
 
+## Deploy on DigitalOcean (one-shot)
+
+For a public, HTTPS-enabled Lurker on a fresh droplet — no SSH required:
+
+1. Point a domain (e.g. `irc.yourdomain.com`) at a fresh droplet's IP.
+2. Create a droplet — the Docker Marketplace image at the smallest size is fine (vanilla Ubuntu 24.04 LTS works too).
+3. Paste the contents of [`deploy/digitalocean-cloud-init.sh`](deploy/digitalocean-cloud-init.sh) into the **User Data** field at droplet creation, after editing `LURKER_DOMAIN` at the top of the script.
+4. Create the droplet, wait ~90 seconds, then visit your domain.
+
+TLS via Let's Encrypt is provisioned automatically by Caddy. Leave `LURKER_DOMAIN` empty (and skip step 1) for a plain-HTTP deployment on port 8015. Deploy progress is logged to `/var/log/lurker-deploy.log` on the droplet.
+
 ## Manual Install (without Docker)
 
 ```bash
