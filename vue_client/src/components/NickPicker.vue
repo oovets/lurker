@@ -65,6 +65,13 @@ const panelBottom = ref(8);
 const activeIndex = ref(0);
 
 const rows = computed(() => {
+  // Bail before touching buffer/query/ignores while closed: a computed only
+  // tracks the deps it reads, so this early return keeps `rows` (and the
+  // watch that subscribes to it) from rebuilding the whole candidate list and
+  // re-coloring every nick on each speakers/members update behind a closed
+  // picker. Nothing renders when closed anyway — the panel's v-if gates on
+  // `open` — so returning [] here is behavior-neutral.
+  if (!props.open) return [];
   const networkId = props.buffer?.networkId;
   const isIgnored = networkId
     ? (nick: string, userhost: string | null) => ignores.isIgnored(networkId, nick, userhost ?? '')

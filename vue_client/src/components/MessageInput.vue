@@ -397,6 +397,15 @@ function tokenAtCursor(
   return { token: value.slice(start, end), start, end };
 }
 
+// True when `before` (the text preceding a token) sits at the start of a
+// logical line — nothing but whitespace since the last newline, or the very
+// start of the input. A nick completed here is being *addressed*, so callers
+// append ': ' instead of a bare space. Shared by Tab-completion and both
+// @-driven selectors so the three paths agree, including on multi-line drafts.
+function isAtLineStart(before: string): boolean {
+  return /(^|\n)\s*$/.test(before);
+}
+
 function buildNickMatches(buf: Buffer, networkId: number, prefix: string): string[] {
   const own = networks.states[networkId]?.nick || '';
   const isIgnored = (nick: string, userhost: string | null) =>
@@ -625,7 +634,7 @@ function onKeydown(e: KeyboardEvent): void {
 
   const prefix = value.slice(0, start);
   const tail = value.slice(end);
-  const atLineStart = /^\s*$/.test(prefix);
+  const atLineStart = isAtLineStart(prefix);
 
   completion = { prefix, tail, token, isChannel, atLineStart, matches, index: 0, caret: 0 };
   applyCompletion();
@@ -702,11 +711,11 @@ function onPickerSelect(nick: string): void {
   }
   const before = value.slice(0, pickerTokenStart);
   const after = value.slice(pickerTokenEnd);
-  // Match Tab-completion (applyCompletion) and the mobile strip
-  // (onStripSelect): a nick at the start of a line is being addressed, so it
-  // gets ': '; mid-sentence gets a bare space.
-  const atLineStart = /(^|\n)\s*$/.test(before);
-  const suffix = atLineStart ? ': ' : ' ';
+  // A nick at the start of a line is being addressed → ': '; mid-sentence
+  // gets a bare space. Identical to the mobile strip (onStripSelect). Tab-
+  // completion shares the isAtLineStart() check but appends nothing
+  // mid-sentence, since it cycles the completion in place.
+  const suffix = isAtLineStart(before) ? ': ' : ' ';
   cycling = true;
   text.value = before + nick + suffix + after;
   cycling = false;
@@ -728,11 +737,10 @@ function onStripSelect(nick: string): void {
   }
   const before = value.slice(0, stripTokenStart);
   const after = value.slice(stripTokenEnd);
-  // Match Tab-completion's suffix rule (applyCompletion above): a nick at the
-  // start of a line is being addressed, so it gets ': '; mid-sentence gets a
-  // bare space. This is what the old @-menu was missing (task #198).
-  const atLineStart = /(^|\n)\s*$/.test(before);
-  const suffix = atLineStart ? ': ' : ' ';
+  // A nick at the start of a line is being addressed → ': '; mid-sentence
+  // gets a bare space (what the old @-menu was missing — task #198). Shares
+  // isAtLineStart() with Tab-completion and the desktop picker.
+  const suffix = isAtLineStart(before) ? ': ' : ' ';
   cycling = true;
   text.value = before + nick + suffix + after;
   cycling = false;
