@@ -12,22 +12,24 @@
     @pointerdown.stop
   >
     <div
-      v-for="row in rows"
+      v-for="row in renderedRows"
       :key="row.lc"
       class="row"
-      :class="{ recent: row.recent }"
+      :class="{ active: row.index === activeIndex }"
       @pointerdown.prevent="pick(row.nick)"
+      @mouseenter="activeIndex = row.index"
     >
-      <span class="nick">{{ row.nick }}</span>
+      <span class="nick" :style="row.color ? { color: row.color } : null">{{ row.nick }}</span>
       <span v-if="row.recent" class="badge">recent</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { buildNickCandidates } from '../utils/nickCompletion.js';
 import { useIgnoresStore } from '../stores/ignores.js';
+import { useNickColors } from '../composables/useNickColors.js';
 import type { Buffer } from '../stores/buffers.js';
 
 const props = withDefaults(
@@ -53,8 +55,14 @@ const emit = defineEmits<{
 }>();
 
 const ignores = useIgnoresStore();
+const nickColors = useNickColors();
 const panelEl = ref<HTMLElement | null>(null);
 const panelBottom = ref(8);
+
+// Index into `rows` (candidate order, 0 = best match) of the keyboard-
+// highlighted entry. Rows render bottom-up — see `renderedRows` — so index 0
+// sits visually at the bottom, nearest the input bar.
+const activeIndex = ref(0);
 
 const rows = computed(() => {
   const networkId = props.buffer?.networkId;
@@ -63,11 +71,49 @@ const rows = computed(() => {
     : null;
   return buildNickCandidates(props.buffer, props.selfNick, props.query, isIgnored)
     .slice(0, 50)
-    .map((c) => ({ nick: c.nick, lc: c.nick.toLowerCase(), recent: c.recent }));
+    .map((c, index) => ({
+      nick: c.nick,
+      lc: c.nick.toLowerCase(),
+      recent: c.recent,
+      index,
+      color: nickColors.color(c.nick),
+    }));
 });
+
+// The panel opens upward, so render candidates worst-to-best top-to-bottom —
+// the most likely pick lands at the bottom, right under the user's eye and
+// closest to the input bar.
+const renderedRows = computed(() => rows.value.slice().reverse());
 
 function pick(nick: string) {
   emit('select', nick);
+}
+
+// Keyboard navigation, driven from MessageInput's textarea keydown handler:
+// the textarea keeps focus while the picker is open, so the picker never
+// receives key events itself. `delta` is in candidate-index space — +1 steps
+// toward worse matches (visually up), -1 toward the best match (visually
+// down) — and clamps at both ends rather than wrapping.
+function moveActive(delta: number) {
+  const n = rows.value.length;
+  if (n === 0) return;
+  activeIndex.value = Math.min(Math.max(activeIndex.value + delta, 0), n - 1);
+}
+
+function confirmActive() {
+  const row = rows.value[activeIndex.value];
+  if (row) pick(row.nick);
+}
+
+function hasCandidates() {
+  return rows.value.length > 0;
+}
+
+defineExpose({ moveActive, confirmActive, hasCandidates });
+
+function scrollActiveIntoView() {
+  const el = panelEl.value?.querySelector('.row.active');
+  if (el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
 }
 
 function recomputePosition() {
@@ -120,10 +166,23 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKey);
 });
 
+// A new candidate set (the query changed, or rows were re-filtered) re-anchors
+// the highlight on the best match and pulls it back into view.
+watch(rows, () => {
+  activeIndex.value = 0;
+  nextTick(scrollActiveIntoView);
+});
+
+watch(activeIndex, () => nextTick(scrollActiveIntoView));
+
 watch(
   () => props.open,
   (v) => {
-    if (v) recomputePosition();
+    if (v) {
+      activeIndex.value = 0;
+      recomputePosition();
+      nextTick(scrollActiveIntoView);
+    }
   },
 );
 </script>
@@ -156,11 +215,11 @@ watch(
 .row:last-child {
   border-bottom: none;
 }
-.row:hover {
+/* Single highlight, shared by mouse and keyboard: hovering a row sets
+   activeIndex (see @mouseenter), so .active alone covers both — no separate
+   :hover rule that could double-highlight during keyboard nav. */
+.row.active {
   background: var(--bg);
-}
-.row.recent .nick {
-  color: var(--accent);
 }
 .nick {
   font-weight: 500;

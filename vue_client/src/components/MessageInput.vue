@@ -72,6 +72,7 @@
       @close="closeColorPicker"
     />
     <NickPicker
+      ref="nickPickerEl"
       :open="pickerOpen"
       :query="pickerQuery"
       :buffer="buffer"
@@ -137,6 +138,7 @@ const fileInputEl = ref<HTMLInputElement | null>(null);
 const dragOver = ref(false);
 const pickerOpen = ref(false);
 const pickerQuery = ref('');
+const nickPickerEl = ref<InstanceType<typeof NickPicker> | null>(null);
 let pickerTokenStart = -1;
 let pickerTokenEnd = -1;
 const stripOpen = ref(false);
@@ -538,6 +540,30 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault();
     closeColorPicker();
     return;
+  }
+  // While the desktop @-nick picker is open with candidates it owns the
+  // navigation keys: arrows move the highlight, Tab/Enter confirm it. This
+  // runs ahead of the history-nav, Tab-completion, and Enter-submit handlers
+  // below so they don't double-fire. Escape is left to NickPicker's own
+  // document listener. Gated on hasCandidates() so a no-match token like
+  // `@zzz` still lets Enter send and Tab fall through to word completion.
+  // The picker is desktop-only — the mobile suggestion strip never opens it.
+  if (pickerOpen.value && nickPickerEl.value?.hasCandidates()) {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      if (!e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        nickPickerEl.value.moveActive(e.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
+    } else if (e.key === 'Tab' && !e.isComposing) {
+      e.preventDefault();
+      nickPickerEl.value.confirmActive();
+      return;
+    } else if (e.key === 'Enter' && !e.isComposing && !e.shiftKey) {
+      e.preventDefault();
+      nickPickerEl.value.confirmActive();
+      return;
+    }
   }
   if (e.key === 'Enter') {
     // Textareas don't submit forms on Enter, so we trigger submission here.
