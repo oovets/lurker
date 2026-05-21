@@ -1,5 +1,5 @@
 <h1>
-  <img src="lurker-icon.png" alt="" width="48" height="48" align="top">&nbsp;&nbsp;Lurker
+  <img src="docs/assets/lurker-icon.png" alt="" width="48" height="48" align="top">&nbsp;&nbsp;Lurker
 </h1>
 
 [![codecov](https://codecov.io/github/amiantos/lurker/graph/badge.svg?token=2KAFLPWKHG)](https://codecov.io/github/amiantos/lurker)
@@ -19,7 +19,7 @@ Lurker runs as an always-on server that stays connected to IRC on your behalf, k
 
 # Screenshot (as macOS PWA)
 
-<img src="screenshot.png" alt="Lurker IRC client screenshot" width="100%">
+<img src="docs/assets/screenshot.png" alt="Lurker IRC client screenshot" width="100%">
 
 # Rave Reviews
 
@@ -42,31 +42,13 @@ curl -O https://raw.githubusercontent.com/amiantos/lurker/main/docker-compose.ym
 docker compose up -d
 ```
 
-Then open <http://localhost:8015> and create your admin account. Username + password is the default; passkeys are optional. See [SELF_HOSTING.md](SELF_HOSTING.md) for the full guide — reverse proxy + HTTPS, enabling passkeys, push notifications, updating, and backups.
+Then open <http://localhost:8015> and create your admin account. Username + password is the default; passkeys are optional. See [SELF_HOSTING.md](docs/SELF_HOSTING.md) for the full guide — reverse proxy + HTTPS, enabling passkeys, push notifications, updating, and backups.
 
 ## Deploy on DigitalOcean (one-shot)
 
-For a public, HTTPS-enabled Lurker on a fresh droplet — no SSH required:
+Stand up a public, HTTPS-enabled Lurker on a fresh droplet from a single pasted script — no SSH required, with passkeys, web push, and TLS all configured for you. Step-by-step instructions are in **[docs/digitalocean.md](docs/digitalocean.md)**.
 
-1. Create a droplet — the Docker Marketplace image at the smallest size is fine (vanilla Ubuntu 24.04 LTS works too).
-2. At droplet creation, expand **Additional Options** and enable **User Scripts** (DigitalOcean's label for cloud-init user data — older guides call it "User data" or "Startup scripts"). Paste in the contents of [`deploy/digitalocean-cloud-init.sh`](deploy/digitalocean-cloud-init.sh), after filling in the two required values near the top of the script — `LURKER_DOMAIN` (your domain, e.g. `irc.yourdomain.com`) and `ADMIN_EMAIL` (your email address).
-3. Once the droplet exists, copy its public IP and add a DNS `A` record pointing your domain at it.
-4. Give it a few minutes, then visit your domain.
-
-You don't need the droplet's IP before creating it: the droplet boots and starts Caddy _before_ DNS exists, and Caddy keeps retrying Let's Encrypt until your `A` record resolves — so HTTPS comes up automatically a few minutes after you set the DNS record. (If you'd rather the certificate be ready the moment the droplet boots, reserve a [Reserved IP](https://docs.digitalocean.com/products/networking/reserved-ips/) first, point DNS at it, then create the droplet and assign that Reserved IP.)
-
-Passkeys and web push notifications are configured automatically — the deploy derives the WebAuthn and push settings from your domain and email — so you can enable them per device from Lurker's in-app settings without touching the server.
-
-Deploy progress is logged to `/var/log/lurker-deploy.log` on the droplet.
-
-**Updating:** SSH in (or open the DigitalOcean web console) and run:
-
-```bash
-cd /opt/lurker
-docker compose pull && docker compose up -d
-```
-
-That's the same command whether or not you enabled HTTPS — the deploy script records the Caddy overlay in `.env`, so `docker compose` picks it up automatically. Your `data/` directory is left untouched.
+[![Watch the Lurker DigitalOcean deployment walkthrough](docs/assets/yt-tutorial-thumb.png)](https://youtu.be/L730O7KNGlA)
 
 ## Manual Install (without Docker)
 
@@ -85,6 +67,12 @@ npm run install:all
 cp .env.example .env   # defaults assume the local hostname documented in the file
 npm run dev
 ```
+
+# Documentation
+
+- **[Self-hosting guide](docs/SELF_HOSTING.md)** — reverse proxy + HTTPS, passkeys, web push, updating, backups, and troubleshooting.
+- **[Deploy on DigitalOcean](docs/digitalocean.md)** — the one-shot droplet walkthrough.
+- **[MCP & HTTP API](docs/MCP.md)** — drive Lurker from agents, scripts, or other external tools.
 
 # Community
 

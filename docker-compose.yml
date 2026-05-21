@@ -7,7 +7,7 @@
 #
 # Then open http://localhost:8015 and create your admin account.
 #
-# See SELF_HOSTING.md for the full setup guide, including how to enable
+# See docs/SELF_HOSTING.md for the full setup guide, including how to enable
 # passkeys, web push notifications, and an HTTPS reverse proxy.
 
 services:
@@ -30,7 +30,7 @@ services:
       # passkey login, set the three vars below to match the public origin
       # your browsers hit. Passkeys require HTTPS for any non-localhost
       # hostname — most operators put Lurker behind Caddy or another
-      # reverse proxy first (see SELF_HOSTING.md).
+      # reverse proxy first (see docs/SELF_HOSTING.md).
       # - WEBAUTHN_RP_ID=lurker.example.com
       # - WEBAUTHN_RP_NAME=Lurker
       # - WEBAUTHN_ORIGIN=https://lurker.example.com
