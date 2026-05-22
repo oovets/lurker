@@ -1139,6 +1139,8 @@ const HELP_LINES = [
   'commands:',
   '  /me <text>             — emote in the current buffer',
   '  /msg <nick> <text>     — open a DM and send (alias: /query)',
+  '  /ns <text>             — message NickServ (e.g. identify <pass>)',
+  '  /cs <text>             — message ChanServ',
   '  /join <#chan>          — join a channel',
   '  /part [#chan] [reason] — leave channel (keeps buffer; alias: /leave)',
   '  /close                 — close current buffer (parts if channel)',
@@ -1212,6 +1214,19 @@ function handleCommand(line: string, networkId: number, target: string): boolean
       }
       buffers.activate(networkId, who);
       return true;
+    }
+    case 'ns':
+    case 'cs': {
+      // /ns and /cs are the near-universal shortcuts for messaging NickServ
+      // and ChanServ. Route as a raw PRIVMSG rather than a `send` so the body
+      // (often `identify <password>`) is never echoed into a buffer and no
+      // service DM buffer is forced open.
+      const service = cmd.toLowerCase() === 'ns' ? 'NickServ' : 'ChanServ';
+      if (!argLine) {
+        localInfo(networkId, target, `usage: /${cmd.toLowerCase()} <text> — message ${service}`);
+        return true;
+      }
+      return sendOrToast({ type: 'raw', networkId, line: `PRIVMSG ${service} :${argLine}` }, line);
     }
     case 'join':
       if (rest[0]) {
