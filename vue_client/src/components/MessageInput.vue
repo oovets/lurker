@@ -792,12 +792,18 @@ async function showEmojiStrip() {
 // either, so the two stay consistent.
 function onEmojiSelect(item: EmojiMatch): void {
   const value = text.value;
-  if (emojiTokenStart < 0) {
+  // Re-validate the captured span still holds an in-progress shortcode before
+  // splicing — the draft could have shifted since the strip opened (edits
+  // re-sync the span via refreshPicker, but the async strip refresh leaves a
+  // brief window). Mirrors the re-check maybeConvertShortcode already does;
+  // on a mismatch, no-op rather than splice blind into the wrong span.
+  const sc = emojiTokenStart >= 0 ? findActiveShortcode(value, emojiTokenEnd) : null;
+  if (!sc || sc.start !== emojiTokenStart) {
     closeEmojiStrip();
     return;
   }
-  const before = value.slice(0, emojiTokenStart);
-  const after = value.slice(emojiTokenEnd);
+  const before = value.slice(0, sc.start);
+  const after = value.slice(sc.end);
   cycling = true;
   text.value = before + item.emoji + after;
   cycling = false;
