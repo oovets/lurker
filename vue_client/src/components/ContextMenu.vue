@@ -137,6 +137,12 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 300;
   min-width: 160px;
+  /* `width: auto` on a position:fixed element near the right edge gets
+     shrink-wrapped to the available viewport space, which wraps long labels
+     before the clamp watcher gets a chance to shift the menu left. `max-content`
+     ignores the viewport constraint and sizes to the widest unwrapped item, so
+     the clamp logic then sees the real width and repositions correctly. */
+  width: max-content;
   background: var(--bg);
   border: 1px solid var(--border);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
@@ -157,6 +163,7 @@ onBeforeUnmount(() => {
   color: inherit;
   font: inherit;
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 .item:hover:not(:disabled) {
