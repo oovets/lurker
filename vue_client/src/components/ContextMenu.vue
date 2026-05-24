@@ -138,23 +138,21 @@ onBeforeUnmount(() => {
   z-index: 300;
   min-width: 160px;
   background: var(--bg);
-  /* --bg-soft and --border resolve to the same color in the default theme, so
-     a plain `1px solid var(--border)` border vanishes against the page edges.
-     Promote the popup with an accent border to match the modal-card treatment
-     used elsewhere — same role here: distinct floating surface. */
-  border: 1px solid var(--accent);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  /* Match the toast: subtle full border + chunky accent left bar. Ties the
+     two floating-popup surfaces together visually. */
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   padding: 4px 0;
   color: var(--fg);
   user-select: none;
 }
 .item {
-  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 7px 14px;
+  padding: 7px 12px;
   background: none;
   border: none;
   color: inherit;
@@ -166,17 +164,6 @@ onBeforeUnmount(() => {
   /* color-mix gives a visible purple wash where plain --bg-soft would be
      near-indistinguishable from the menu's own border-adjacent surface. */
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-/* Left accent strip on hover mirrors the toast aesthetic and gives the row a
-   clear "selected" cue beyond the subtle background wash. */
-.item:hover:not(:disabled)::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--accent);
 }
 .item:hover:not(:disabled) .icon {
   color: var(--accent);
