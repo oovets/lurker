@@ -349,10 +349,11 @@ export const useBuffersStore = defineStore('buffers', {
     loadAround(networkId: number | string, target: string, anchorId: number, halfLimit = 100) {
       const buf = ensureBuffer(this, networkId, target);
       const token = nextHistoryToken();
+      const wasDetached = buf.detached;
       buf.detached = true;
       buf.pendingHistoryToken = token;
       buf.loadingHistory = true;
-      socketSend({
+      const sent = socketSend({
         type: 'history',
         mode: 'around',
         networkId,
@@ -361,6 +362,15 @@ export const useBuffersStore = defineStore('buffers', {
         token,
         limit: halfLimit,
       });
+      // Same rollback rationale as reattachToLive — a failed send leaves no
+      // response to clear the loading flag. Restoring detached to its prior
+      // state too (rather than forcing false) avoids stomping on a buffer
+      // that was already detached from a previous jump.
+      if (!sent) {
+        buf.loadingHistory = false;
+        buf.pendingHistoryToken = null;
+        buf.detached = wasDetached;
+      }
     },
     // Token-guarded replace for the 'around' response. A mismatched token
     // means a fresher request superseded this one — drop the stale slice
@@ -393,7 +403,7 @@ export const useBuffersStore = defineStore('buffers', {
       const token = nextHistoryToken();
       buf.pendingHistoryToken = token;
       buf.loadingHistory = true;
-      socketSend({
+      const sent = socketSend({
         type: 'history',
         mode: 'latest',
         networkId,
@@ -401,6 +411,17 @@ export const useBuffersStore = defineStore('buffers', {
         token,
         limit,
       });
+      // socketSend returns false when the socket isn't open. No response will
+      // arrive to clear loadingHistory, and there's no reconnect handler that
+      // resets it per-buffer — so without this rollback the buffer would be
+      // permanently stranded "loading" and every subsequent fetch guard
+      // (this function's early-return, MessageList's requestMoreHistory) would
+      // block forever. Relevant when activate fires before the socket has
+      // (re)connected, e.g. push-notification deep-link into a cold PWA.
+      if (!sent) {
+        buf.loadingHistory = false;
+        buf.pendingHistoryToken = null;
+      }
     },
     applyLatestReplace(networkId: number | string, target: string, payload: any) {
       const buf = ensureBuffer(this, networkId, target);
@@ -631,6 +652,30 @@ export const useBuffersStore = defineStore('buffers', {
       // do its own mark-read against the new tail.
       if (buf.pendingRefetch) {
         buf.pendingRefetch = false;
+        this.reattachToLive(networkId, target);
+      } else if (
+        buf.messages.length === 0 &&
+        buf.hasMoreOlder &&
+        !buf.detached &&
+        !buf.loadingHistory
+      ) {
+        // First-load fetch. The buffer shell exists but has no messages —
+        // either it's brand new (profile-modal "Send DM" to a nick we've
+        // never DM'd before) or it was pre-created by a side channel
+        // (presence/typing/MONITOR events touch ensureBuffer without
+        // seeding history) and the initial backlog snapshot only covers
+        // buffers that were already open at socket-connect. Push-notification
+        // deep-links land here too, since isOpen() is satisfied by any shell
+        // in the store regardless of message contents. Kick a latest fetch
+        // here so every entry path is uniformly seeded — the MessageList
+        // lifecycle's ensureViewportFilled() goes back to being a safety
+        // net rather than the load-bearing initial-fetch trigger.
+        //
+        // hasMoreOlder gates against the truly-empty case: a brand-new
+        // DM/channel with no server history returns an empty latest slice
+        // that leaves messages.length=0 but flips hasMoreOlder to false —
+        // without this guard we'd refire the same empty fetch on every
+        // re-activate.
         this.reattachToLive(networkId, target);
       }
       // For DMs, ask the server to WHOIS-probe the peer so the banner/sidebar
