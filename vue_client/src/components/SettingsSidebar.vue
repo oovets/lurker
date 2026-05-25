@@ -208,7 +208,6 @@ watch(searchEl, (el) => {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 1px;
 }
 
 .search-wrap {
@@ -247,11 +246,9 @@ watch(searchEl, (el) => {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  gap: 2px;
-  margin: 2px 0 4px;
+  margin-bottom: 4px;
   max-height: 240px;
   overflow: hidden;
-  padding-left: 16px;
 }
 .sidebar-subnav-enter-active,
 .sidebar-subnav-leave-active {
@@ -267,7 +264,7 @@ watch(searchEl, (el) => {
 .sidebar-sublink {
   color: var(--fg-muted);
   text-decoration: none;
-  padding: 4px 16px;
+  padding: 4px 16px 4px 30px;
   font-size: 0.9em;
   line-height: 1.35;
   text-transform: lowercase;
@@ -277,7 +274,7 @@ watch(searchEl, (el) => {
 .sidebar-sublink::before {
   content: '';
   position: absolute;
-  left: 2px;
+  left: 18px;
   top: 0;
   height: 50%;
   width: 8px;
@@ -288,7 +285,7 @@ watch(searchEl, (el) => {
 .sidebar-sublink:not(:last-child)::after {
   content: '';
   position: absolute;
-  left: 2px;
+  left: 18px;
   top: 50%;
   bottom: 0;
   width: 0;
