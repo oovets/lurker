@@ -50,7 +50,7 @@
           >{{ cat.label }}</RouterLink
         >
         <Transition name="sidebar-subnav">
-          <div
+          <nav
             v-if="
               cat.id === 'appearance' &&
               activeCategoryId === 'appearance' &&
@@ -73,7 +73,7 @@
             >
               {{ subsection.label }}
             </RouterLink>
-          </div>
+          </nav>
         </Transition>
       </template>
     </template>

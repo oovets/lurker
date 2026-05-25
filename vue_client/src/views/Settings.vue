@@ -144,6 +144,9 @@ const activeAppearanceSubsectionId = ref<string>('');
 // scrolling settles so the scroll-spy does not animate through every heading.
 let pendingAppearanceSubsectionId = '';
 let scrollSpyReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+// Tracks a subsection id that scrollToAppearanceSubsection already scrolled to
+// so the hash watcher can skip the redundant second scroll.
+let pendingGroupScrollId = '';
 
 onMounted(() => {
   if (!settings.loaded) {
@@ -251,7 +254,7 @@ function scrollGroupIntoView(groupEl: HTMLElement) {
   const rootRect = root.getBoundingClientRect();
   const groupRect = groupEl.getBoundingClientRect();
   const groupId = groupEl.dataset.settingGroup;
-  if (groupId) holdActiveAppearanceSubsection(groupId);
+  if (groupId && activeCategoryId.value === 'appearance') holdActiveAppearanceSubsection(groupId);
   root.scrollTo({
     top: root.scrollTop + groupRect.top - rootRect.top - 12,
     behavior: 'smooth',
@@ -259,6 +262,7 @@ function scrollGroupIntoView(groupEl: HTMLElement) {
 }
 
 async function scrollToAppearanceSubsection(id: string) {
+  pendingGroupScrollId = id;
   await nextTick();
   const root = contentEl.value;
   if (!root) return;
@@ -290,6 +294,10 @@ watch(
 
     const groupEl = root.querySelector<HTMLElement>(`[data-setting-group="${CSS.escape(target)}"]`);
     if (groupEl) {
+      if (target === pendingGroupScrollId) {
+        pendingGroupScrollId = '';
+        return;
+      }
       scrollGroupIntoView(groupEl);
     }
   },
