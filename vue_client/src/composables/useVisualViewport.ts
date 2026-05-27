@@ -77,8 +77,7 @@ export function installVisualViewport(): void {
     //   - a text-like input has focus (mobile keyboard MUST be up)
     // Desktop with a focused input is a false positive, but .composer-host
     // is mobile-only so there's no visible side effect.
-    const heightOpen =
-      window.innerHeight - height > KEYBOARD_HEIGHT_THRESHOLD_PX;
+    const heightOpen = window.innerHeight - height > KEYBOARD_HEIGHT_THRESHOLD_PX;
     const offsetOpen = offsetTop > 50;
     const focusOpen = isTextInputFocused();
     const open = heightOpen || offsetOpen || focusOpen;

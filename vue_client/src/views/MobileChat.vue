@@ -101,11 +101,7 @@
       <SystemConsole v-if="isSystemConsole" />
       <MessageList v-else :pending-scroll-id="pendingScrollId" />
       <StatusBar compact />
-      <div
-        v-if="!isSystemConsole"
-        class="composer-host"
-        :class="{ 'keyboard-open': keyboardOpen }"
-      >
+      <div v-if="!isSystemConsole" class="composer-host" :class="{ 'keyboard-open': keyboardOpen }">
         <MessageInput ref="messageInputRef" />
       </div>
     </section>
