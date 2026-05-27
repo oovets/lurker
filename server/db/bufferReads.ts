@@ -108,11 +108,7 @@ const listClearedStmt = db.prepare(`
     AND cleared_before_message_id > 0
 `);
 
-export function getClearedState(
-  userId: number,
-  networkId: number,
-  target: string,
-): ClearedState {
+export function getClearedState(userId: number, networkId: number, target: string): ClearedState {
   const row = getClearedStmt.get(userId, networkId, target) as
     | { clearedBeforeId: number | null; clearedAt: string | null }
     | undefined;

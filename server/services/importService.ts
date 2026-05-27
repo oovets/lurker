@@ -24,6 +24,12 @@ interface ExportTableDefFull {
   blobColumns?: string[];
   rekeyOnImport?: boolean;
   fkRekey?: Record<string, string>;
+  // FK columns that should be set to NULL — rather than causing the whole
+  // row to be dropped — when their referenced id is missing from the map.
+  // Used for nullable foreign keys whose absence is recoverable (e.g. a
+  // /clear marker whose boundary message is gone; the rest of the
+  // buffer_reads row, including the read pointer, is still valid).
+  fkRekeyNullable?: string[];
 }
 
 export class ImportError extends Error {
@@ -102,6 +108,7 @@ function rekeyRow(
 ): Record<string, unknown> {
   const out = { ...row };
   if (!def.fkRekey) return out;
+  const nullable = new Set(def.fkRekeyNullable ?? []);
   for (const [col, target] of Object.entries(def.fkRekey)) {
     if (out[col] == null) continue;
     if (target === 'users') {
@@ -111,9 +118,15 @@ function rekeyRow(
       // settings-only archive has no messages map, so buffer_reads rows
       // can't find their last_read_message_id). Treat the same as a row
       // missing from a populated map: leave undefined, let the caller drop.
+      // Columns flagged nullable map missing → null instead, so the rest
+      // of the row (other FKs, scalar data) survives.
       const map = idMaps[target];
       const mapped = map ? map.get(out[col]) : undefined;
-      out[col] = mapped === undefined ? undefined : mapped;
+      if (mapped === undefined) {
+        out[col] = nullable.has(col) ? null : undefined;
+      } else {
+        out[col] = mapped;
+      }
     }
   }
   return out;

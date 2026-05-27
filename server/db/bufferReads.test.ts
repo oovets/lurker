@@ -77,14 +77,14 @@ describe('setClearedState / getClearedState', () => {
     });
   });
 
-  it("does not clobber the read pointer when /clear writes to a row that also tracks read state", () => {
+  it('does not clobber the read pointer when /clear writes to a row that also tracks read state', () => {
     bufferReads.setReadState(user.id, net!.id, '#mixed', 80);
     bufferReads.setClearedState(user.id, net!.id, '#mixed', 80, '2026-05-26T12:00:00.000Z');
     expect(bufferReads.getReadState(user.id, net!.id, '#mixed')).toBe(80);
     expect(bufferReads.getClearedState(user.id, net!.id, '#mixed').clearedBeforeId).toBe(80);
   });
 
-  it("does not clobber the clear marker when setReadState writes to the same row", () => {
+  it('does not clobber the clear marker when setReadState writes to the same row', () => {
     bufferReads.setClearedState(user.id, net!.id, '#mixed2', 50, '2026-05-26T12:00:00.000Z');
     bufferReads.setReadState(user.id, net!.id, '#mixed2', 90);
     expect(bufferReads.getClearedState(user.id, net!.id, '#mixed2')).toEqual({
@@ -105,7 +105,13 @@ describe('setClearedState / getClearedState', () => {
 
   it('overwrites an existing marker when /clear runs again', () => {
     bufferReads.setClearedState(user.id, net!.id, '#again', 10, '2026-05-26T11:00:00.000Z');
-    const out = bufferReads.setClearedState(user.id, net!.id, '#again', 30, '2026-05-26T12:00:00.000Z');
+    const out = bufferReads.setClearedState(
+      user.id,
+      net!.id,
+      '#again',
+      30,
+      '2026-05-26T12:00:00.000Z',
+    );
     expect(out).toEqual({ clearedBeforeId: 30, clearedAt: '2026-05-26T12:00:00.000Z' });
   });
 });

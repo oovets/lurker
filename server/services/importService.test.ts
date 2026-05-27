@@ -24,6 +24,8 @@ let pinBuffer: typeof import('../db/pinnedBuffers.js').pinBuffer;
 let addMask: typeof import('../db/ignoredMasks.js').addMask;
 let addBookmark: typeof import('../db/bookmarks.js').addBookmark;
 let setReadState: typeof import('../db/bufferReads.js').setReadState;
+let setClearedState: typeof import('../db/bufferReads.js').setClearedState;
+let getClearedState: typeof import('../db/bufferReads.js').getClearedState;
 let insertUpload: typeof import('../db/uploadHistory.js').insertUpload;
 let setNicklistCollapsed: typeof import('../db/nicklistCollapsed.js').setNicklistCollapsed;
 let setChannelNotifyAlways: typeof import('../db/channelNotify.js').setChannelNotifyAlways;
@@ -49,7 +51,7 @@ beforeAll(async () => {
   ({ pinBuffer } = await import('../db/pinnedBuffers.js'));
   ({ addMask } = await import('../db/ignoredMasks.js'));
   ({ addBookmark } = await import('../db/bookmarks.js'));
-  ({ setReadState } = await import('../db/bufferReads.js'));
+  ({ setReadState, setClearedState, getClearedState } = await import('../db/bufferReads.js'));
   ({ setNicklistCollapsed } = await import('../db/nicklistCollapsed.js'));
   ({ setChannelNotifyAlways } = await import('../db/channelNotify.js'));
   ({ upsertDraft } = await import('../db/drafts.js'));
@@ -299,6 +301,124 @@ describe('importFromZipBuffer — roundtrip', () => {
     const msg = db
       .prepare('SELECT id FROM messages WHERE id = ?')
       .get(reads[0].last_read_message_id);
+    expect(msg).toBeDefined();
+  });
+
+  it('round-trips the /clear marker (cleared_before_message_id, cleared_at) through export+import', async () => {
+    const { alice, net } = seedAlice();
+    // Anchor a /clear at the second message in #general (m2 id = m1 + 1).
+    const ts = '2026-05-26T12:34:56.000Z';
+    const m2Id = (
+      db
+        .prepare(`SELECT MAX(id) AS id FROM messages WHERE network_id = ? AND target = ?`)
+        .get(net.id, '#general') as { id: number }
+    ).id;
+    setClearedState(alice.id, net.id, '#general', m2Id, ts);
+
+    const ned = createUser(`ned_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    const buf = await exportToBuffer(alice.id, { includeMessages: true });
+    await importFromZipBuffer(ned.id, buf);
+
+    // Find the rekeyed message that corresponds to the source boundary.
+    const importedRead = db.prepare('SELECT * FROM buffer_reads WHERE user_id = ?').get(ned.id) as {
+      last_read_message_id: number;
+      cleared_before_message_id: number | null;
+      cleared_at: string | null;
+    };
+    expect(importedRead.cleared_at).toBe(ts);
+    expect(importedRead.cleared_before_message_id).not.toBeNull();
+    // The boundary points to a real message row in the imported user's space.
+    const msg = db
+      .prepare('SELECT id FROM messages WHERE id = ?')
+      .get(importedRead.cleared_before_message_id);
+    expect(msg).toBeDefined();
+  });
+
+  it('preserves the read pointer when the /clear boundary message is missing from the import', async () => {
+    // Surgically construct a malformed archive: a buffer_reads row whose
+    // cleared_before_message_id references a message id that DOES NOT exist
+    // in messages.ndjson. The naive fkRekey path would drop the entire row
+    // (and lose last_read_message_id along with it); fkRekeyNullable should
+    // keep the row with NULL clear instead.
+    const { alice } = seedAlice();
+    const buf = await exportToBuffer(alice.id, { includeMessages: true });
+    const yauzl = await import('yauzl');
+    const { ZipArchive } = await import('archiver');
+
+    const entries = await new Promise<Map<string, Buffer>>((resolve, reject) => {
+      yauzl.fromBuffer(buf, { lazyEntries: true }, (err, zip) => {
+        if (err) return reject(err);
+        const out = new Map<string, Buffer>();
+        zip.readEntry();
+        zip.on('entry', (entry) => {
+          if (entry.fileName.endsWith('/')) {
+            zip.readEntry();
+            return;
+          }
+          zip.openReadStream(entry, (e2, stream) => {
+            if (e2) return reject(e2);
+            const chunks: Buffer[] = [];
+            stream.on('data', (c: Buffer) => chunks.push(c));
+            stream.on('end', () => {
+              out.set(entry.fileName, Buffer.concat(chunks));
+              zip.readEntry();
+            });
+            stream.on('error', reject);
+          });
+        });
+        zip.on('end', () => resolve(out));
+        zip.on('error', reject);
+      });
+    });
+
+    const data = JSON.parse(entries.get('data.json')!.toString('utf8'));
+    // Inject a clear marker pointing at id 999999 — guaranteed missing from
+    // messages.ndjson (which only carries alice's two seeded messages).
+    expect(data.buffer_reads.length).toBe(1);
+    const originalLastRead = data.buffer_reads[0].last_read_message_id;
+    data.buffer_reads[0].cleared_before_message_id = 999999;
+    data.buffer_reads[0].cleared_at = '2026-05-26T12:34:56.000Z';
+    entries.set('data.json', Buffer.from(JSON.stringify(data)));
+
+    const archive = new ZipArchive();
+    const rebuiltChunks: Buffer[] = [];
+    archive.on('data', (c: Buffer) => rebuiltChunks.push(c));
+    for (const [name, content] of entries) archive.append(content, { name });
+    await archive.finalize();
+    const rebuilt = Buffer.concat(rebuiltChunks);
+
+    const olive = createUser(`olive_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    await importFromZipBuffer(olive.id, rebuilt);
+
+    // The row must survive — losing it would also strand a valid read pointer.
+    const importedRead = db
+      .prepare('SELECT * FROM buffer_reads WHERE user_id = ?')
+      .get(olive.id) as
+      | {
+          last_read_message_id: number;
+          cleared_before_message_id: number | null;
+          cleared_at: string | null;
+        }
+      | undefined;
+    expect(importedRead).toBeDefined();
+    // Boundary nulls out (FK target was missing); cleared_at is a stale
+    // scalar but the read path masks it via the boundary check, so callers
+    // see a clean no-clear state.
+    expect(importedRead!.cleared_before_message_id).toBeNull();
+    const importedNetworkId = (
+      db.prepare('SELECT id FROM networks WHERE user_id = ?').get(olive.id) as { id: number }
+    ).id;
+    expect(getClearedState(olive.id, importedNetworkId, '#general')).toEqual({
+      clearedBeforeId: 0,
+      clearedAt: null,
+    });
+    // The rekeyed read pointer must land on a real message row in olive's
+    // imported network (not the original alice id; that would be a leaked
+    // foreign id from before rekey).
+    expect(importedRead!.last_read_message_id).not.toBe(originalLastRead);
+    const msg = db
+      .prepare('SELECT id FROM messages WHERE id = ?')
+      .get(importedRead!.last_read_message_id);
     expect(msg).toBeDefined();
   });
 
