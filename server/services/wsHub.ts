@@ -370,8 +370,10 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
     const delaySec = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 30;
     const t = setTimeout(() => {
       autoAwayTimers.delete(userId);
-      // Re-check: a socket may have reconnected during the delay.
-      if ((socketsByUser.get(userId)?.size ?? 0) > 0) return;
+      // Re-check: a client may have become visible during the delay.
+      // "Visible" rather than "connected" so a backgrounded tab — which the
+      // push pipeline already treats as absent — counts as absent here too.
+      if (userHasVisibleClient(userId)) return;
       const message = buildAutoAwayMessage(userId);
       ircManager.setAwayAll(userId, message, { autoSet: true });
     }, delaySec * 1000);
@@ -385,24 +387,20 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
       set = new Set();
       socketsByUser.set(userId, set);
     }
-    const wasEmpty = set.size === 0;
     set.add(ws);
-    if (wasEmpty) {
-      // First client back: cancel any pending auto-away and clear an
-      // already-set auto-away across networks. Manual /away is preserved.
-      clearAutoAwayTimer(userId);
-      ircManager.clearAwayAll(userId, { autoSet: true });
-    }
+    // Intentionally no auto-away clear here. New sockets start at
+    // presence.visible=false; the client confirms visibility moments later
+    // and that flips state through evaluatePresence(). Clearing on raw
+    // connect would falsely "bring the user back" when a backgrounded
+    // service worker reconnects.
   }
 
   function removeSocket(userId: number, ws: LurkerWebSocket): void {
     const set = socketsByUser.get(userId);
     if (!set) return;
     set.delete(ws);
-    if (set.size === 0) {
-      socketsByUser.delete(userId);
-      scheduleAutoAway(userId);
-    }
+    if (set.size === 0) socketsByUser.delete(userId);
+    evaluatePresence(userId);
   }
 
   function userHasVisibleClient(userId: number): boolean {
@@ -412,6 +410,18 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
       if (ws.readyState === ws.OPEN && ws.presence?.visible) return true;
     }
     return false;
+  }
+
+  // Single source of truth for "is the user present?" — shared by auto-away
+  // and push so an idle/backgrounded tab can't keep one system thinking the
+  // user is here while the other treats them as gone.
+  function evaluatePresence(userId: number): void {
+    if (userHasVisibleClient(userId)) {
+      clearAutoAwayTimer(userId);
+      ircManager.clearAwayAll(userId, { autoSet: true });
+    } else {
+      scheduleAutoAway(userId);
+    }
   }
 
   // Single path for "tell every tab of this user what the buffer's unread
@@ -820,9 +830,13 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
       msg.networkId = networkId;
     }
     switch (msg.type) {
-      case 'presence':
-        ws.presence = { visible: !!msg.visible };
+      case 'presence': {
+        const next = !!msg.visible;
+        const prev = ws.presence?.visible === true;
+        ws.presence = { visible: next };
+        if (next !== prev) evaluatePresence(userId);
         break;
+      }
       case 'send':
       case 'action': {
         // Both share the same shape and the same WS-only echo on clientId.
