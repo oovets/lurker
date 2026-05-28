@@ -71,16 +71,19 @@ const emit = defineEmits<{
 
 const rootEl = ref<HTMLElement | null>(null);
 
-// `v-show` (not `v-if`) preserves the strip's scrollLeft across hides, so
-// reopening with a new candidate set could land the new chip 0 off-screen
-// to the left of the previous session's scroll position — and the
-// activeIndex watcher below wouldn't fire because activeIndex stayed at 0.
-// Reset scrollLeft on the closed→open transition (items.length 0 → >0) so
-// every fresh open starts at chip 0.
+// `v-show` (not `v-if`) preserves scrollLeft across hides, and the host
+// resets activeIndex to 0 on every setNickStrip/setEmojiStrip call — so any
+// time the items reference changes, we know the user isn't mid-nav and the
+// scroll should snap back to the start. Watching the reference (not
+// length > 0) catches both the reopen-after-close case AND the in-place
+// refresh case (typing another char while the strip stays visible), which
+// the length-transition check missed.
 watch(
-  () => props.items.length > 0,
-  (visible, wasVisible) => {
-    if (visible && !wasVisible && rootEl.value) rootEl.value.scrollLeft = 0;
+  () => props.items,
+  () => {
+    nextTick(() => {
+      if (rootEl.value) rootEl.value.scrollLeft = 0;
+    });
   },
 );
 
