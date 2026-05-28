@@ -128,7 +128,12 @@ import {
   moveEmojiActive,
   confirmEmojiActive,
   hasEmojiCandidates,
+  moveNickActive,
+  confirmNickActive,
+  hasNickCandidates,
+  type NickStripItem,
 } from '../composables/useComposerOverlay.js';
+import { useNickColors } from '../composables/useNickColors.js';
 import type { Buffer } from '../stores/buffers.js';
 
 const networks = useNetworksStore();
@@ -139,6 +144,7 @@ const settings = useSettingsStore();
 const uploads = useUploadsStore();
 const toasts = useToastsStore();
 const ignores = useIgnoresStore();
+const nickColors = useNickColors();
 const inputEl = ref<HTMLTextAreaElement | null>(null);
 const formEl = ref<HTMLElement | null>(null);
 const fileInputEl = ref<HTMLInputElement | null>(null);
@@ -432,6 +438,17 @@ function buildNickMatches(buf: Buffer, networkId: number, prefix: string): strin
   return buildNickCandidates(buf, own, prefix, isIgnored).map((c) => c.nick);
 }
 
+// Strip-flavored variant: caps at 30 chips and pre-computes the per-nick
+// color so the StatusBar chip slot can stay declarative.
+function buildNickStripItems(buf: Buffer, networkId: number, prefix: string): NickStripItem[] {
+  const own = networks.states[networkId]?.nick || '';
+  const isIgnored = (nick: string, userhost: string | null) =>
+    ignores.isIgnored(networkId, nick, userhost ?? '');
+  return buildNickCandidates(buf, own, prefix, isIgnored)
+    .slice(0, 30)
+    .map((c) => ({ nick: c.nick, color: nickColors.color(c.nick) }));
+}
+
 function buildChannelMatches(networkId: number, prefix: string): string[] {
   const lower = prefix.toLowerCase();
   return buffers
@@ -601,6 +618,42 @@ function onKeydown(e: KeyboardEvent): void {
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       nickPickerEl.value.confirmActive();
+      return;
+    }
+  }
+  // The mobile/compact nick strip owns navigation keys while open with
+  // candidates — same shape as the emoji block below, and as the desktop
+  // @-picker above. All four arrows cycle the highlight (Down/Right next,
+  // Up/Left previous), Tab/Enter confirm the active chip, Escape closes the
+  // strip. refreshPicker ensures the strip and the @-picker are never open
+  // at once, so the two blocks can't both fire. Tab here intentionally
+  // confirms the highlighted chip rather than falling through to in-place
+  // Tab-completion — the strip is the primary completion UI when it's up.
+  if (overlay.nickOpen && !e.isComposing && hasNickCandidates()) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeStrip();
+      return;
+    }
+    if (
+      e.key === 'ArrowUp' ||
+      e.key === 'ArrowDown' ||
+      e.key === 'ArrowLeft' ||
+      e.key === 'ArrowRight'
+    ) {
+      if (!e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        const forward = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+        moveNickActive(forward ? 1 : -1);
+        return;
+      }
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      confirmNickActive();
+      return;
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      confirmNickActive();
       return;
     }
   }
@@ -856,12 +909,13 @@ function refreshPicker() {
     return;
   }
 
-  // Mobile runs both UIs concurrently — an `@`-prefixed token routes to the
-  // vertical picker, anything else routes to the horizontal strip. Desktop
-  // is picker-only by default; the setting opts into the strip globally.
-  const useStrip = isMobile.value
-    ? !token.startsWith('@')
-    : !!settings.effective('input.suggestion_strip_on_desktop');
+  // Both UIs are concurrent wherever the strip is enabled — `@`-prefix is the
+  // explicit opt-in to the vertical picker, anything else routes to the
+  // horizontal strip. Mobile always has the strip; desktop opts in via the
+  // setting. With the setting off on desktop there is no strip, so non-`@`
+  // tokens get no completion UI and `@`-tokens still drive the picker.
+  const stripEnabled = isMobile.value || !!settings.effective('input.suggestion_strip_on_desktop');
+  const useStrip = stripEnabled && !token.startsWith('@');
 
   if (useStrip) {
     // On mobile both UIs are live, so dropping the `@` (which switched us
@@ -874,9 +928,16 @@ function refreshPicker() {
     // flashing on every single-letter word.
     const prefix = token.startsWith('@') ? token.slice(1) : token;
     if (prefix.length >= 2) {
-      setNickStrip(true, prefix);
-      stripTokenStart = start;
-      stripTokenEnd = end;
+      const buf = buffer.value;
+      const items =
+        buf && active.value ? buildNickStripItems(buf, active.value.networkId, prefix) : [];
+      if (items.length > 0) {
+        setNickStrip(true, items);
+        stripTokenStart = start;
+        stripTokenEnd = end;
+      } else {
+        closeStrip();
+      }
     } else {
       closeStrip();
     }

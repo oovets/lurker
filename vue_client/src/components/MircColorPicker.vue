@@ -5,7 +5,7 @@
 
 <template>
   <div v-if="open" class="mirc-picker" @pointerdown.stop @mousedown.prevent.stop>
-    <!-- iOS keyboard preservation: same trick as NickSuggestionStrip — div
+    <!-- iOS keyboard preservation: same trick as SuggestionStrip — div
          role=button + @mousedown.prevent keeps focus on the textarea so the
          soft keyboard stays up while the user picks a colour. Action fires on
          `click` (end of touch), not pointerdown, so closing the popover

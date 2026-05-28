@@ -12,7 +12,7 @@
     @pointerdown.stop
     @mousedown.prevent.stop
   >
-    <!-- iOS keyboard preservation, same rationale as NickSuggestionStrip:
+    <!-- iOS keyboard preservation, same rationale as SuggestionStrip:
          fire on `click` (end of touch), keep `@mousedown.prevent` on the row
          so focus never leaves the textarea, and use a plain <div role=button>
          rather than a focusable <button>. Emitting on pointerdown would close

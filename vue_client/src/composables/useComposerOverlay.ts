@@ -11,13 +11,18 @@
 import { reactive, readonly, type DeepReadonly } from 'vue';
 import type { EmojiMatch } from '../utils/emojiData.js';
 
+export interface NickStripItem {
+  nick: string;
+  color: string | null;
+}
+
 export interface ComposerOverlayState {
-  // Nick suggestion strip — mobile by default, opt-in on desktop. The buffer
-  // and self-nick the strip needs are derived by the renderer from the
-  // active-buffer stores; they're always the active buffer's, so there's no
-  // need to pipe them through this state.
+  // Nick suggestion strip — mobile by default, opt-in on desktop. Items are
+  // pushed by the host (MessageInput) so candidate building and ignore
+  // filtering stay in one place and mirror the emoji flow.
   nickOpen: boolean;
-  nickQuery: string;
+  nickItems: NickStripItem[];
+  nickActiveIndex: number;
   // Emoji `:shortcode:` strip.
   emojiOpen: boolean;
   emojiItems: EmojiMatch[];
@@ -28,7 +33,8 @@ export interface ComposerOverlayState {
 
 const state = reactive<ComposerOverlayState>({
   nickOpen: false,
-  nickQuery: '',
+  nickItems: [],
+  nickActiveIndex: 0,
   emojiOpen: false,
   emojiItems: [],
   emojiActiveIndex: 0,
@@ -64,9 +70,10 @@ export function setComposerOverlayHandlers(h: ComposerOverlayHandlers): void {
   if (h.onColorClose) onColorClose = h.onColorClose;
 }
 
-export function setNickStrip(open: boolean, query = ''): void {
+export function setNickStrip(open: boolean, items: NickStripItem[] = []): void {
   state.nickOpen = open;
-  state.nickQuery = query;
+  state.nickItems = items;
+  state.nickActiveIndex = 0;
 }
 
 export function setEmojiStrip(open: boolean, items: EmojiMatch[] = []): void {
@@ -98,6 +105,27 @@ export function confirmEmojiActive(): void {
 
 export function hasEmojiCandidates(): boolean {
   return state.emojiItems.length > 0;
+}
+
+// Nick-strip keyboard navigation — same shape as the emoji helpers above so
+// the host's keydown handler treats both strips identically.
+export function moveNickActive(delta: number): void {
+  const n = state.nickItems.length;
+  if (n === 0) return;
+  state.nickActiveIndex = (state.nickActiveIndex + delta + n) % n;
+}
+
+export function setNickActive(index: number): void {
+  if (index >= 0 && index < state.nickItems.length) state.nickActiveIndex = index;
+}
+
+export function confirmNickActive(): void {
+  const item = state.nickItems[state.nickActiveIndex];
+  if (item !== undefined) onNickSelect(item.nick);
+}
+
+export function hasNickCandidates(): boolean {
+  return state.nickItems.length > 0;
 }
 
 // Renderer-side dispatchers — bound by StatusBar's popover event handlers,

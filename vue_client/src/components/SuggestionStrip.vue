@@ -5,15 +5,14 @@
 
 <!--
   Generic horizontal suggestion strip rendered as a StatusBar overlay — the
-  IRCCloud-style autocomplete bar. Visually it mirrors NickSuggestionStrip
-  (same chrome as the bar it covers); behaviourally it's keyboard-navigable
-  via an externally-owned activeIndex so the host's keydown handler can
-  drive it without an imperative ref.
+  IRCCloud-style autocomplete bar. Same chrome as the bar it covers (so the
+  bar visually disappears while the strip is up); keyboard-navigable via an
+  externally-owned activeIndex so the host's keydown handler can drive it
+  without an imperative ref.
 
   The strip is content-agnostic: callers pass an `items` array, a `keyFor`
   function, and the current `activeIndex`, and render each chip's body
-  through the `chip` slot. The emoji suggester is the first consumer;
-  NickSuggestionStrip could later adopt it.
+  through the `chip` slot. Used by both the nick and emoji suggesters.
 -->
 
 <template>
@@ -24,10 +23,16 @@
     @pointerdown.stop
     @mousedown.prevent.stop
   >
-    <!-- iOS keyboard preservation, same rationale as NickSuggestionStrip:
-         fire on `click` (end of touch), keep `@mousedown.prevent` on the chip
-         so focus never leaves the textarea, and use a plain <div role=button>
-         rather than a focusable <button>. -->
+    <!-- iOS keyboard preservation:
+         - Fire the action on `click` (end of the touch sequence). Emitting on
+           pointerdown closes the strip *mid-touch*, so the subsequent mousedown
+           lands on whatever's underneath (StatusBar) instead of this chip —
+           defeating @mousedown.prevent and dismissing the soft keyboard.
+         - @mousedown.prevent is the canonical iOS hook that prevents the
+           browser from shifting focus away from the textarea on tap. It must
+           fire on the chip itself, which is why the action moved to click.
+         - Plain <div>, not <button>: a <button> is focusable, so iOS would
+           still steal focus during the touch before mousedown.prevent runs. -->
     <div
       v-for="(item, i) in items"
       :key="keyFor(item)"
@@ -66,16 +71,48 @@ const emit = defineEmits<{
 
 const rootEl = ref<HTMLElement | null>(null);
 
+// `v-show` (not `v-if`) preserves scrollLeft across hides, and the host
+// resets activeIndex to 0 on every setNickStrip/setEmojiStrip call — so any
+// time the items reference changes, we know the user isn't mid-nav and the
+// scroll should snap back to the start. Watching the reference (not
+// length > 0) catches both the reopen-after-close case AND the in-place
+// refresh case (typing another char while the strip stays visible), which
+// the length-transition check missed.
+watch(
+  () => props.items,
+  () => {
+    nextTick(() => {
+      if (rootEl.value) rootEl.value.scrollLeft = 0;
+    });
+  },
+);
+
 // When the host shifts activeIndex via keyboard nav, pull the chip into
 // view if the row has overflowed horizontally. Watching the prop keeps the
 // strip declarative — no imperative ref method needed.
+//
+// We compute the horizontal shift ourselves rather than calling
+// scrollIntoView({ block: 'nearest', inline: 'nearest' }). scrollIntoView
+// walks up the ancestor chain trying to satisfy both axes; even though the
+// strip is `overflow-y: hidden`, the vertical axis still resolves against
+// the next scrollable ancestor (the message area / document), which yanks
+// the page up by ~1px when the chip's box doesn't line up perfectly with
+// the viewport. Restricting the operation to the strip's own scrollLeft
+// keeps the motion purely horizontal.
 watch(
   () => props.activeIndex,
   () => {
     nextTick(() => {
-      rootEl.value
-        ?.querySelector('.chip.active')
-        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const strip = rootEl.value;
+      const active = strip?.querySelector<HTMLElement>('.chip.active');
+      if (!strip || !active) return;
+      const stripRect = strip.getBoundingClientRect();
+      const chipRect = active.getBoundingClientRect();
+      if (chipRect.left < stripRect.left) {
+        strip.scrollLeft -= stripRect.left - chipRect.left;
+      } else if (chipRect.right > stripRect.right) {
+        strip.scrollLeft += chipRect.right - stripRect.right;
+      }
     });
   },
 );

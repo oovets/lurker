@@ -59,13 +59,18 @@
          pick gets applied" logic live in useComposerOverlay so MessageInput
          (which owns the textarea) and StatusBar (which renders the popover)
          stay decoupled. -->
-    <NickSuggestionStrip
+    <SuggestionStrip
       v-show="overlay.nickOpen"
-      :query="overlay.nickQuery"
-      :buffer="buffer"
-      :self-nick="ownNick"
-      @select="selectNick"
-    />
+      :items="overlay.nickItems"
+      :key-for="nickKeyFor"
+      :active-index="overlay.nickActiveIndex"
+      @select="onNickStripSelect"
+      @hover="setNickActive"
+    >
+      <template #chip="{ item }">
+        <span :style="item.color ? { color: item.color } : null">{{ item.nick }}</span>
+      </template>
+    </SuggestionStrip>
     <SuggestionStrip
       v-show="overlay.emojiOpen"
       :items="overlay.emojiItems"
@@ -102,7 +107,6 @@ import { useComposing } from '../composables/useComposing.js';
 import { useSelfLabel } from '../composables/useSelfLabel.js';
 import { formatTimestamp } from '../utils/timestamp.js';
 import { isPeerOffline, isPeerAway } from '../utils/peerPresence.js';
-import NickSuggestionStrip from './NickSuggestionStrip.vue';
 import SuggestionStrip from './SuggestionStrip.vue';
 import MircColorPicker from './MircColorPicker.vue';
 import {
@@ -110,9 +114,11 @@ import {
   selectNick,
   selectEmoji,
   setEmojiActive,
+  setNickActive,
   applyColor,
   resetColor,
   closeColorPicker,
+  type NickStripItem,
 } from '../composables/useComposerOverlay.js';
 import type { EmojiMatch } from '../utils/emojiData.js';
 
@@ -164,17 +170,13 @@ const { newBelow } = useScrollState();
 const active = computed(() => networks.activeBuffer);
 const buffer = computed(() => (networks.activeKey ? buffers.byKey(networks.activeKey) : null));
 
-// Composer-overlay state and the props the popovers need. ownNick and
-// `buffer` aren't routed through the composable because they're always the
-// active buffer / network's — derive them here from the same stores
-// MessageInput reads.
 const overlay = useComposerOverlay();
-const ownNick = computed(() => {
-  const a = active.value;
-  if (!a) return '';
-  return networks.states[a.networkId]?.nick || '';
-});
 const emojiKeyFor = (m: EmojiMatch): string => m.name;
+const nickKeyFor = (item: NickStripItem): string => item.nick.toLowerCase();
+// Route the chip click through selectNick (which fires the host's registered
+// onNickSelect). hover events are wired straight to setNickActive on the
+// template — same shape as the emoji strip.
+const onNickStripSelect = (item: NickStripItem): void => selectNick(item.nick);
 
 const isServerBuffer = computed(() => !!active.value?.target?.startsWith(':server:'));
 const isChannel = computed(() => !!active.value?.target?.startsWith('#'));
