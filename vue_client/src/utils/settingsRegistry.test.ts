@@ -37,10 +37,17 @@ describe('optionVisible', () => {
     expect(optionVisible(opt('uploads.hoarder.api_key'), { isNode: true })).toBe(false);
   });
 
-  it('keeps the upload pipeline settings visible in node edition', () => {
-    // Tenant-relevant prefs (quality, paste behavior), not provider config —
-    // these must survive the gating that hides the provider + credentials.
-    expect(optionVisible(opt('uploads.image.quality'), { isNode: true })).toBe(true);
+  it('hides the cost/abuse pipeline knobs in node edition (operator-controlled)', () => {
+    // dimension / quality / max size are enforced server-side in node edition
+    // (A8); the tenant must not be able to set them, here or via the API.
+    expect(optionVisible(opt('uploads.image.max_dimension'), { isNode: true })).toBe(false);
+    expect(optionVisible(opt('uploads.image.quality'), { isNode: true })).toBe(false);
+    expect(optionVisible(opt('uploads.image.max_upload_mb'), { isNode: true })).toBe(false);
+    // ...but they stay visible on a self-hosted box.
+    expect(optionVisible(opt('uploads.image.quality'), { isNode: false })).toBe(true);
+  });
+
+  it('keeps paste-to-upload (a client UX pref, not a cost knob) visible in node edition', () => {
     expect(optionVisible(opt('uploads.paste.enabled'), { isNode: true })).toBe(true);
   });
 });

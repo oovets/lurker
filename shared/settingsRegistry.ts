@@ -836,6 +836,9 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
     min: 256,
     max: 8192,
     default: 2048,
+    // Cost/abuse lever — operator-controlled in node edition (enforced
+    // server-side in A8), not a tenant knob.
+    selfHostedOnly: true,
     description:
       'Longest-edge limit for static images before they are re-encoded as JPEG. ' +
       'Animated GIF/WebP/APNG bypass this and are uploaded verbatim.',
@@ -849,6 +852,7 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
     min: 30,
     max: 100,
     default: 85,
+    selfHostedOnly: true,
     description: 'JPEG quality for the re-encode pass on static images (30–100).',
   },
   {
@@ -860,6 +864,7 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
     min: 1,
     max: 200,
     default: 25,
+    selfHostedOnly: true,
     description:
       'Hard cap on the raw upload size in megabytes. Anything larger is ' +
       'rejected before the optimization pipeline runs.',
