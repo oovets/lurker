@@ -10,6 +10,8 @@
 // config check agree, and keeps it out of the (mockable) provider registry so
 // the route reads the real environment in tests.
 
+import { getOption } from '../settingsRegistry.js';
+
 /** Provider id forced for every upload in node edition. */
 export const NODE_UPLOAD_PROVIDER_ID = 'hoarder';
 
@@ -30,4 +32,35 @@ export function nodeUploadSecrets(): { url: string; api_key: string } {
 export function nodeUploadConfigured(): boolean {
   const { url, api_key } = nodeUploadSecrets();
   return Boolean(url && api_key);
+}
+
+// Read an operator-set integer override for a registry int setting: clamped to
+// that setting's [min,max] and falling back to its registry default when unset
+// or malformed. Operator env is trusted, but clamping stops a typo'd value from
+// breaking every upload on the cell.
+function intOverride(envName: string, settingKey: string): number {
+  const opt = getOption(settingKey);
+  const fallback = opt && typeof opt.default === 'number' ? opt.default : 0;
+  const raw = (process.env[envName] || '').trim();
+  const n = raw ? Math.floor(Number(raw)) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  const min = opt && 'min' in opt ? opt.min : n;
+  const max = opt && 'max' in opt ? opt.max : n;
+  return Math.min(Math.max(n, min), max);
+}
+
+/**
+ * Operator-controlled image-pipeline limits for node edition. In the hosted
+ * service these are NOT tenant settings — a tenant could otherwise inflate
+ * storage/bandwidth or lift their own size cap with a direct settings write —
+ * so the cell sources them from the environment, clamped to each setting's
+ * registry bounds, with the registry defaults as the floor. A3 hides the
+ * matching tenant UI; this is the enforcement behind it.
+ */
+export function nodeUploadLimits(): { maxMb: number; maxDim: number; quality: number } {
+  return {
+    maxMb: intOverride('LURKER_NODE_UPLOAD_MAX_MB', 'uploads.image.max_upload_mb'),
+    maxDim: intOverride('LURKER_NODE_UPLOAD_MAX_DIM', 'uploads.image.max_dimension'),
+    quality: intOverride('LURKER_NODE_UPLOAD_QUALITY', 'uploads.image.quality'),
+  };
 }
