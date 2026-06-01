@@ -106,6 +106,18 @@ beforeAll(async () => {
     }).id,
   );
 
+  // B's own '#secret' buffer on B's own network — a deliberate target-name
+  // collision with A's buffer. Proves isolation keys on network ownership, not
+  // on the buffer name (the case Copilot flagged on PR #157).
+  insertMessage({
+    networkId: netBId,
+    target: SECRET_TARGET,
+    time: new Date().toISOString(),
+    type: 'message',
+    nick: 'b-side',
+    text: 'b-own-message',
+  });
+
   uploadIdA = insertUpload(userAId, {
     provider: 'test',
     url: 'https://example.test/a.png',
@@ -233,7 +245,13 @@ describe('Verb layer (WebSocket + MCP core) — tenant B is denied', () => {
       networkId: number;
       target: string;
     }>;
-    expect(buffers.every((b) => b.networkId !== netAId && b.target !== SECRET_TARGET)).toBe(true);
+    // Isolation is by network ownership, not target name. B has its own
+    // same-named '#secret' buffer (seeded below), so the invariant is "B sees
+    // NOTHING on A's network" — not "no buffer is named #secret". The `some`
+    // check confirms B does see its own colliding buffer, so this isn't
+    // vacuously passing on an empty list.
+    expect(buffers.every((b) => b.networkId !== netAId)).toBe(true);
+    expect(buffers.some((b) => b.networkId === netBId && b.target === SECRET_TARGET)).toBe(true);
 
     const networks = callVerb('list_networks', verbCtx(userBId), {}) as Array<{ id: number }>;
     expect(networks.map((n) => n.id)).not.toContain(netAId);
