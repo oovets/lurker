@@ -69,7 +69,7 @@ export function buildRegistration(cfg: OrchestratorConfig): {
 // false on any non-2xx or network error — never throws.
 export async function reportToOrchestrator(cfg: OrchestratorConfig): Promise<boolean> {
   try {
-    const res = await fetch(`${cfg.url.replace(/\/+$/, '')}/api/cells/register`, {
+    const res = await fetch(`${cfg.url.replace(/\/+$/, '')}/_cp/cells/register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

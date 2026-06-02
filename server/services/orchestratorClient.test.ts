@@ -70,14 +70,14 @@ describe('buildRegistration', () => {
 });
 
 describe('reportToOrchestrator', () => {
-  it('posts to /api/cells/register with the bearer and returns true on 2xx', async () => {
+  it('posts to /_cp/cells/register with the bearer and returns true on 2xx', async () => {
     const fetchMock = vi.fn<FetchMock>().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
     const cfg = mod.readOrchestratorConfig()!;
     expect(await mod.reportToOrchestrator(cfg)).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
-    expect(url).toBe('http://orchestrator:8020/api/cells/register');
+    expect(url).toBe('http://orchestrator:8020/_cp/cells/register');
     expect(opts.headers.Authorization).toBe('Bearer fleet-secret');
     expect(opts.headers['User-Agent']).toMatch(/^Lurker\//);
   });
