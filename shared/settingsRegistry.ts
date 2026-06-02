@@ -799,7 +799,7 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
     type: 'int',
     min: 5,
     max: 3600,
-    default: 300,
+    default: 900,
     description:
       'How long to wait after the last client disconnects before setting AWAY. ' +
       'Avoids flapping on browser refreshes or brief network blips.',
