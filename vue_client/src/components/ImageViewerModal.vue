@@ -100,23 +100,25 @@ onMounted(() => {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
+  --control-rail: calc(var(--icon-lg) + (2 * var(--space-2)));
   background: rgba(0, 0, 0, 0.84);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  grid-template-rows: var(--control-rail) minmax(0, 1fr) var(--control-rail);
   gap: var(--space-4);
   padding: var(--space-7);
   outline: none;
 }
 
 .topbar {
+  grid-column: 1;
+  grid-row: 1;
   width: 100%;
-  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   align-items: center;
   padding-top: env(safe-area-inset-top);
   padding-right: env(safe-area-inset-right);
+  z-index: 1;
 }
 .controls {
   display: flex;
@@ -139,8 +141,10 @@ onMounted(() => {
 }
 
 .stage {
+  grid-column: 1;
+  grid-row: 2;
   width: 100%;
-  flex: 1;
+  height: 100%;
   min-height: 0;
   display: flex;
   align-items: center;
