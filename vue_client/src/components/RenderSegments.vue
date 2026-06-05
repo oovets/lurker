@@ -6,10 +6,10 @@
 <template>
   <template v-for="(seg, i) in segments" :key="i">
     <SpoilerText v-if="seg.spoiler" :seg="seg" />
-    <!-- @click.stop: this component renders inside clickable rows (a history
+    <!-- Links render inside clickable rows (a history
          row jumps to the message on click), and a link activation shouldn't
-         also fire the row's handler. Propagation only — the link still
-         opens. -->
+         also fire the row's handler. onLinkClick preserves that propagation
+         guard, then optionally intercepts image URLs for the viewer. -->
     <a
       v-else-if="seg.url"
       class="msg-link"
@@ -17,7 +17,7 @@
       target="_blank"
       rel="noreferrer noopener"
       :style="styleFor(seg)"
-      @click.stop
+      @click="onLinkClick($event, seg.url!)"
       >{{ seg.text }}</a
     >
     <!-- Channel name: clickable only when a network is in scope (the message
@@ -45,8 +45,11 @@ import type { CSSProperties } from 'vue';
 import type { RenderSegment } from '../utils/nickColor.js';
 import { segmentInlineStyle, segmentHasStyle } from '../utils/nickColor.js';
 import { useBuffersStore } from '../stores/buffers.js';
+import { useSettingsStore } from '../stores/settings.js';
 import { useMircPalette } from '../composables/useNickColors.js';
+import { useImageModal } from '../composables/useImageModal.js';
 import { socketSend } from '../composables/useSocket.js';
+import { isImageUrl } from '../utils/uploadHostMatch.js';
 import SpoilerText from './SpoilerText.vue';
 
 // The single renderer for an array of RenderSegments (the output of
@@ -72,6 +75,8 @@ const props = withDefaults(
 );
 
 const buffers = useBuffersStore();
+const settings = useSettingsStore();
+const imageModal = useImageModal();
 const mircPalette = useMircPalette();
 
 function styleFor(seg: RenderSegment): CSSProperties {
@@ -79,6 +84,23 @@ function styleFor(seg: RenderSegment): CSSProperties {
 }
 function hasStyle(seg: RenderSegment): boolean {
   return segmentHasStyle(seg);
+}
+
+function isModalImageUrl(url: string): boolean {
+  if (settings.effective('chat.image_modal.enabled') !== true) return false;
+
+  return isImageUrl(url);
+}
+
+function onLinkClick(event: MouseEvent, url: string): void {
+  event.stopPropagation();
+
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+    return;
+  if (!isModalImageUrl(url)) return;
+
+  event.preventDefault();
+  imageModal.open(url);
 }
 
 // Clicking a channel name mirrors IRCCloud. IRC channel names are

@@ -169,6 +169,11 @@
     <QuickSwitcher v-if="showSwitcher" @close="showSwitcher = false" />
     <SearchModal v-if="showSearch" @close="showSearch = false" @jump="onJumpToMessage" />
     <KeyboardHelpModal v-if="showKbdHelp" @close="showKbdHelp = false" />
+    <ImageViewerModal
+      v-if="imageModal.isOpen && imageModal.url !== null"
+      :url="imageModal.url"
+      @close="imageModal.close()"
+    />
     <UserProfileModal
       v-if="whois.viewer.open && whois.viewer.networkId != null"
       :nick="whois.viewer.nick"
@@ -213,12 +218,14 @@ import SearchModal from '../components/SearchModal.vue';
 import KeyboardHelpModal from '../components/KeyboardHelpModal.vue';
 import NickNoteModal from '../components/NickNoteModal.vue';
 import UserProfileModal from '../components/UserProfileModal.vue';
+import ImageViewerModal from '../components/ImageViewerModal.vue';
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts.js';
 import { useNicklistCollapseStore } from '../stores/nicklistCollapse.js';
 import { useNickNotesStore } from '../stores/nickNotes.js';
 import { useWhoisStore } from '../stores/whois.js';
 import { useBufferActions } from '../composables/useBufferActions.js';
 import { useChannelListModal } from '../composables/useChannelListModal.js';
+import { useImageModal } from '../composables/useImageModal.js';
 import { useNetworkEditor } from '../composables/useNetworkEditor.js';
 import { useJumpToMessage } from '../composables/useJumpToMessage.js';
 
@@ -237,6 +244,7 @@ const whois = useWhoisStore();
 const bufferActions = useBufferActions();
 
 const channelListModal = reactive(useChannelListModal());
+const imageModal = reactive(useImageModal());
 const networkEditor = reactive(useNetworkEditor());
 const showHighlights = ref(false);
 const showBookmarks = ref(false);
@@ -270,6 +278,7 @@ const anyModalOpen = computed(
     showBookmarks.value ||
     showTopic.value ||
     channelListModal.isOpen ||
+    imageModal.isOpen ||
     showUploads.value ||
     showSwitcher.value ||
     showSearch.value ||

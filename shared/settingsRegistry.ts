@@ -778,6 +778,19 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
       'the JOIN line is revealed. 0 disables unmasking.',
   },
 
+  // ─── Inline image viewer ──────────────────────────────────────────────
+  {
+    key: 'chat.image_modal.enabled',
+    label: 'Image viewer',
+    category: 'chat',
+    group: 'viewing',
+    type: 'bool',
+    default: false,
+    description:
+      'When enabled, clicking a URL to an image opens it in an in-app viewer instead ' +
+      'of a new browser tab. Cmd/Ctrl-click always opens in a new tab.',
+  },
+
   // ─── Auto-away (sets you AWAY when no client is connected) ────────────
   {
     key: 'away.auto.enabled',
@@ -1282,6 +1295,7 @@ export const GROUPS: Readonly<Record<string, string>> = Object.freeze({
   'auto-away': 'Auto-away',
   provider: 'Provider',
   pipeline: 'Image pipeline',
+  viewing: 'Viewing',
   catbox: 'catbox.moe',
   hoarder: 'Hoarder',
   alerts: 'Alerts',

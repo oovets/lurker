@@ -145,6 +145,11 @@
     />
     <RecentUploadsModal v-if="showUploads" @close="showUploads = false" />
     <SearchModal v-if="showSearch" @close="showSearch = false" @jump="onJumpToMessage" />
+    <ImageViewerModal
+      v-if="imageModal.isOpen && imageModal.url !== null"
+      :url="imageModal.url"
+      @close="imageModal.close()"
+    />
     <UserProfileModal
       v-if="whois.viewer.open && whois.viewer.networkId != null"
       :nick="whois.viewer.nick"
@@ -185,9 +190,11 @@ import RecentUploadsModal from '../components/RecentUploadsModal.vue';
 import SearchModal from '../components/SearchModal.vue';
 import NickNoteModal from '../components/NickNoteModal.vue';
 import UserProfileModal from '../components/UserProfileModal.vue';
+import ImageViewerModal from '../components/ImageViewerModal.vue';
 import { useNickNotesStore } from '../stores/nickNotes.js';
 import { useWhoisStore } from '../stores/whois.js';
 import { useChannelListModal } from '../composables/useChannelListModal.js';
+import { useImageModal } from '../composables/useImageModal.js';
 import { useNetworkEditor } from '../composables/useNetworkEditor.js';
 import { useJumpToMessage } from '../composables/useJumpToMessage.js';
 import { useVisualViewport } from '../composables/useVisualViewport.js';
@@ -223,6 +230,7 @@ function openSystemConsole() {
 // flow is short and stateful, and a URL would expose us to bookmarks that
 // land on the buffer screen with no active buffer.
 const channelListModal = reactive(useChannelListModal());
+const imageModal = reactive(useImageModal());
 const networkEditor = reactive(useNetworkEditor());
 const screen = ref('list');
 const showHighlights = ref(false);
