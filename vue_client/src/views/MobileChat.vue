@@ -45,10 +45,11 @@
         </button>
         <!-- The system console has no composer (so no placeholder to carry a
              name) and no buffer actions — it keeps a plain title. Real buffers
-             drop the name (it moves to the input placeholder) and fold every
-             buffer/topic/member/server action into the single cog, since the
-             mobile header is already tight. Search/highlights/saved stay inline
-             as they're global and frequently reached. -->
+             drop the name (it moves to the input placeholder) and fold the
+             remaining buffer/topic/server actions into the single cog, since the
+             mobile header is already tight. Search/highlights/saved/uploads and
+             the channel members toggle stay inline — they're global or
+             frequently reached. -->
         <span v-if="isSystemConsole" class="title">System console</span>
         <span class="spacer"></span>
         <button class="icon" title="Search messages" @click="showSearch = true">
@@ -59,6 +60,18 @@
         </button>
         <button class="icon" title="Saved messages" @click="showBookmarks = true">
           <i class="fa-regular fa-bookmark"></i>
+        </button>
+        <button class="icon" title="Recent uploads" @click="showUploads = true">
+          <i class="fa-solid fa-paperclip"></i>
+        </button>
+        <button
+          v-if="isChannel"
+          class="icon"
+          title="Members"
+          aria-label="Members"
+          @click="screen = 'members'"
+        >
+          <i class="fa-solid fa-users"></i>
         </button>
         <button
           v-if="active"
@@ -214,12 +227,13 @@ const pendingScrollId = ref<number | null>(null);
 const messageInputRef = ref<{ focus: () => void } | null>(null);
 const bufferCogBtn = ref<HTMLElement | null>(null);
 
-// Mobile folds every buffer/topic/member/server action behind one cog to keep
-// the header uncluttered. The menu is assembled per buffer type: view-topic and
-// members are navigation shortcuts unique to this layout, then either the shared
-// buffer-actions menu (pin/notify/profile/note/close) for channels & DMs, or the
-// server controls (browse/connect/edit) for server buffers. Anchored under the
-// cog like the desktop sidebar menu; ContextMenu clamps it to the viewport.
+// Mobile folds the remaining buffer/topic/server actions behind one cog to keep
+// the header uncluttered (Members is an inline header button — see template).
+// The menu is assembled per buffer type: view-topic is a navigation shortcut
+// unique to this layout, then either the shared buffer-actions menu
+// (pin/notify/profile/note/close) for channels & DMs, or the server controls
+// (browse/connect/edit) for server buffers. Anchored under the cog like the
+// desktop sidebar menu; ContextMenu clamps it to the viewport.
 function openBufferActions() {
   const a = active.value;
   const el = bufferCogBtn.value;
@@ -249,15 +263,6 @@ function openBufferActions() {
       { label: 'Edit network', icon: 'fa-solid fa-gear', onClick: editActiveNetwork },
     );
   } else {
-    if (isChannel.value) {
-      items.push({
-        label: 'Members',
-        icon: 'fa-solid fa-users',
-        onClick: () => {
-          screen.value = 'members';
-        },
-      });
-    }
     const bufItems = bufferActions.buildItems(activeBuf.value as BufferLike);
     if (items.length && bufItems.length) items.push({ divider: true });
     items.push(...bufItems);
