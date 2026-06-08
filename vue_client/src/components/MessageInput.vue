@@ -1152,6 +1152,20 @@ function onStripSelect(nick: string): void {
   });
 }
 
+// Reply action from the message list's action bar: prepend `nick: ` to the
+// current draft (unless it's already addressed to them) and focus the
+// composer. Mirrors the history-recall focus dance — setInputAndCaretEnd owns
+// the `cycling` guard, and the focus()-in-a-microtask matches onHistorySelect
+// so iOS raises the keyboard from the originating tap.
+function addressInComposer(nick: string): void {
+  if (!active.value || !nick) return;
+  const prefix = `${nick}: `;
+  const cur = text.value;
+  const next = cur.startsWith(prefix) ? cur : cur ? `${prefix}${cur}` : prefix;
+  setInputAndCaretEnd(next);
+  queueMicrotask(() => inputEl.value?.focus());
+}
+
 // Tap on the `>` prompt: toggle the recall menu. Opening it closes the other
 // suggesters so only one overlay is ever up (mirrors how they close each
 // other). Gated on history existing — the prompt button only renders when
@@ -1344,6 +1358,7 @@ onMounted(() => {
     onColorApply: onApplyColor,
     onColorReset: onPickReset,
     onColorClose: closeColorPicker,
+    onAddress: addressInComposer,
   });
 });
 

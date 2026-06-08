@@ -1,9 +1,7 @@
 // Copyright (c) 2026 Brad Root
 // SPDX-License-Identifier: MPL-2.0
 
-import type { ContextMenuItem } from './useContextMenu.js';
 import { useBookmarksStore } from '../stores/bookmarks.js';
-import { useContextMenu } from './useContextMenu.js';
 
 export interface MessageLike {
   id?: number | null;
@@ -17,47 +15,60 @@ export interface MessageLike {
 
 export interface MessageContext {
   networkId: number;
+  onReply(message: MessageLike): void;
   onIgnore(message: MessageLike): void;
 }
 
-export interface MessageActionsAPI {
-  buildItems(
-    message: MessageLike | null | undefined,
-    ctx: MessageContext | null | undefined,
-  ): ContextMenuItem[];
-  openMenuFor(
-    message: MessageLike | null | undefined,
-    ctx: MessageContext | null | undefined,
-    x: number,
-    y: number,
-  ): void;
-  openMenuFromButton(
-    message: MessageLike | null | undefined,
-    ctx: MessageContext | null | undefined,
-    buttonEl: Element | null,
-  ): void;
+export interface MessageAction {
+  key: 'reply' | 'copy' | 'save' | 'ignore';
+  // Tooltip + accessible label for the icon button.
+  label: string;
+  // Font Awesome classes for the button glyph.
+  icon: string;
+  onClick(): void;
+  // Toggles the "lit" treatment — currently only the bookmark when saved.
+  active?: boolean;
 }
 
-// Shared per-message context menu actions. Right-click, mobile long-press, and
-// the hover three-dots affordance all surface the same items. The caller owns
-// component-local UI for the ignore confirmation (mirrors useMemberActions)
-// and passes it in via `context.onIgnore(message)`.
-//
-// `message` shape: { id, nick, text, self, userhost, network_id|networkId, ... }
-// `context` shape: { networkId, onIgnore(message) }
-export function useMessageActions(): MessageActionsAPI {
-  const bookmarks = useBookmarksStore();
-  const menu = useContextMenu();
-
-  function buildItems(
+export interface MessageActionsAPI {
+  buildActions(
     message: MessageLike | null | undefined,
     ctx: MessageContext | null | undefined,
-  ): ContextMenuItem[] {
+  ): MessageAction[];
+}
+
+// Single source of truth for the per-message actions rendered as the hover
+// action bar in MessageList (issue #117 — replaced the kebab + context menu).
+// The caller owns the component-local UI for the ignore confirmation
+// (mirrors useMemberActions) and the reply hand-off to the composer, passing
+// both in via `context`.
+//
+// `message` shape: { id, nick, text, self, userhost, network_id|networkId, ... }
+// `context` shape: { networkId, onReply(message), onIgnore(message) }
+export function useMessageActions(): MessageActionsAPI {
+  const bookmarks = useBookmarksStore();
+
+  function buildActions(
+    message: MessageLike | null | undefined,
+    ctx: MessageContext | null | undefined,
+  ): MessageAction[] {
     if (!message || !ctx) return [];
-    const items: ContextMenuItem[] = [];
+    const actions: MessageAction[] = [];
+
+    // Reply: prepend `nick: ` to the composer. Addressing your own line is
+    // pointless, so self rows skip it (same gate as Ignore).
+    if (!message.self && message.nick) {
+      actions.push({
+        key: 'reply',
+        label: `Reply to ${message.nick}`,
+        icon: 'fa-solid fa-reply',
+        onClick: () => ctx.onReply(message),
+      });
+    }
 
     if (message.text) {
-      items.push({
+      actions.push({
+        key: 'copy',
         label: 'Copy text',
         icon: 'fa-regular fa-copy',
         onClick: () => {
@@ -67,54 +78,31 @@ export function useMessageActions(): MessageActionsAPI {
       });
     }
 
+    // Bookmarks are only meaningful for messages with a stable server id.
+    if (message.id != null) {
+      const saved = bookmarks.isSaved(message.id);
+      actions.push({
+        key: 'save',
+        label: saved ? 'Remove bookmark' : 'Save message',
+        icon: saved ? 'fa-solid fa-bookmark' : 'fa-regular fa-bookmark',
+        active: saved,
+        onClick: () => bookmarks.toggle(message),
+      });
+    }
+
     // Ignoring your own messages doesn't make sense; the server uses the
     // user's hostmask for delivery, not ignore filtering.
     if (!message.self && message.nick) {
-      items.push({
+      actions.push({
+        key: 'ignore',
         label: `Ignore ${message.nick}…`,
         icon: 'fa-solid fa-ban',
         onClick: () => ctx.onIgnore(message),
       });
     }
 
-    // Bookmarks are only meaningful for messages with a stable server id.
-    // Locally-echoed rows that haven't been persisted yet (rare) get a
-    // disabled placeholder so the menu shape stays predictable.
-    if (message.id != null) {
-      const saved = bookmarks.isSaved(message.id);
-      items.push({ divider: true });
-      items.push({
-        label: saved ? 'Remove bookmark' : 'Save message',
-        icon: saved ? 'fa-solid fa-bookmark' : 'fa-regular fa-bookmark',
-        onClick: () => bookmarks.toggle(message),
-      });
-    }
-
-    return items;
+    return actions;
   }
 
-  function openMenuFor(
-    message: MessageLike | null | undefined,
-    ctx: MessageContext | null | undefined,
-    x: number,
-    y: number,
-  ): void {
-    const items = buildItems(message, ctx);
-    if (items.length === 0) return;
-    menu.open(items, x, y);
-  }
-
-  function openMenuFromButton(
-    message: MessageLike | null | undefined,
-    ctx: MessageContext | null | undefined,
-    buttonEl: Element | null,
-  ): void {
-    if (!buttonEl) return;
-    const items = buildItems(message, ctx);
-    if (items.length === 0) return;
-    const rect = buttonEl.getBoundingClientRect();
-    menu.open(items, rect.left, rect.bottom + 2, buttonEl);
-  }
-
-  return { buildItems, openMenuFor, openMenuFromButton };
+  return { buildActions };
 }

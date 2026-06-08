@@ -53,6 +53,10 @@ let onEmojiSelect: EmojiSelectHandler = () => {};
 let onColorApply: ColorApplyHandler = () => {};
 let onColorReset: VoidHandler = () => {};
 let onColorClose: VoidHandler = () => {};
+// Address a nick from outside the composer (the message action bar's Reply).
+// Same signature as a nick pick, but it prepends `nick: ` to the whole draft
+// rather than splicing at a token span, so it gets its own handler.
+let onAddress: NickSelectHandler = () => {};
 
 export interface ComposerOverlayHandlers {
   onNickSelect?: NickSelectHandler;
@@ -60,6 +64,7 @@ export interface ComposerOverlayHandlers {
   onColorApply?: ColorApplyHandler;
   onColorReset?: VoidHandler;
   onColorClose?: VoidHandler;
+  onAddress?: NickSelectHandler;
 }
 
 export function setComposerOverlayHandlers(h: ComposerOverlayHandlers): void {
@@ -68,6 +73,7 @@ export function setComposerOverlayHandlers(h: ComposerOverlayHandlers): void {
   if (h.onColorApply) onColorApply = h.onColorApply;
   if (h.onColorReset) onColorReset = h.onColorReset;
   if (h.onColorClose) onColorClose = h.onColorClose;
+  if (h.onAddress) onAddress = h.onAddress;
 }
 
 export function setNickStrip(open: boolean, items: NickStripItem[] = []): void {
@@ -132,6 +138,11 @@ export function hasNickCandidates(): boolean {
 // route back through the registered MessageInput callbacks.
 export function selectNick(nick: string): void {
   onNickSelect(nick);
+}
+// Reply affordance: route an "address this nick" request to MessageInput,
+// which owns the draft text and the focus/caret dance.
+export function addressNick(nick: string): void {
+  onAddress(nick);
 }
 export function selectEmoji(item: EmojiMatch): void {
   onEmojiSelect(item);

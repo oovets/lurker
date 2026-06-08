@@ -145,17 +145,26 @@
             /></template>
           </span>
         </template>
-        <button
+        <div
           v-if="eligibleForActions(row.m)"
-          type="button"
           class="row-actions"
-          title="Message actions"
+          role="group"
           aria-label="Message actions"
-          @click.stop="onActionsClick($event, row.m)"
-          @contextmenu.stop.prevent
         >
-          <i class="fa-solid fa-ellipsis-vertical"></i>
-        </button>
+          <button
+            v-for="a in actionsFor(row.m)"
+            :key="a.key"
+            type="button"
+            class="row-action"
+            :class="{ active: a.active }"
+            :title="a.label"
+            :aria-label="a.label"
+            @click.stop="a.onClick()"
+            @contextmenu.stop.prevent
+          >
+            <i :class="a.icon"></i>
+          </button>
+        </div>
       </div>
     </template>
   </div>
@@ -202,7 +211,8 @@ import LinkedText from './LinkedText.vue';
 import RenderSegments from './RenderSegments.vue';
 import IgnoreModal from './IgnoreModal.vue';
 import { useMessageActions } from '../composables/useMessageActions.js';
-import type { MessageContext } from '../composables/useMessageActions.js';
+import type { MessageContext, MessageAction } from '../composables/useMessageActions.js';
+import { addressNick } from '../composables/useComposerOverlay.js';
 import { setViewedBuffer } from '../composables/useViewedBuffer.js';
 
 // Extended BufferMessage fields accessed in the template and script
@@ -380,11 +390,10 @@ function rowClass(row: RenderRow) {
   };
 }
 
-// Per-message context menu wiring. Same items surface via right-click,
-// mobile long-press, and the hover three-dots button — every path funnels
-// through useMessageActions. The ignore confirmation modal is owned here so
-// the menu callback can hand off without needing to know which view it lives
-// in (mirrors MemberList's pattern).
+// Per-message action-bar wiring (issue #117). The hover bar renders the
+// actions built by useMessageActions; the ignore confirmation modal and the
+// reply hand-off to the composer are owned here so the action callbacks don't
+// need to know which view they live in (mirrors MemberList's pattern).
 const messageActions = useMessageActions();
 const ignoreTarget = ref<IgnoreTarget | null>(null);
 
@@ -407,9 +416,12 @@ function parseUserHost(userhost: string | null | undefined): {
   return { user: rest.slice(0, at) || null, host: rest.slice(at + 1) || null };
 }
 
-function menuContext(m: ChatMessage): MessageContext {
+function actionContext(m: ChatMessage): MessageContext {
   return {
     networkId: buffer.value?.networkId ?? 0,
+    onReply: (msg) => {
+      if (msg.nick) addressNick(msg.nick);
+    },
     onIgnore: (msg) => {
       const { user, host } = parseUserHost(msg.userhost);
       ignoreTarget.value = {
@@ -422,14 +434,10 @@ function menuContext(m: ChatMessage): MessageContext {
   };
 }
 
-function onActionsClick(e: MouseEvent, m: ChatMessage | undefined) {
-  if (!eligibleForActions(m)) return;
+function actionsFor(m: ChatMessage | undefined | null): MessageAction[] {
+  if (!m) return [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  messageActions.openMenuFromButton(
-    m as any,
-    menuContext(m!),
-    (e.currentTarget as Element) || null,
-  );
+  return messageActions.buildActions(m as any, actionContext(m));
 }
 
 const smartFilterEnabled = computed(() => !!settings.effective('chat.smart_filter'));
@@ -1248,39 +1256,58 @@ watch(
   background: var(--bg-soft);
 }
 
-/* Hover-revealed three-dots button on eligible rows. Sits in the gutter on
-   the right edge of the line. Mobile reaches the menu via the same hover
-   path: iOS Safari's sticky :hover makes the first tap on a row reveal the
-   dots, and a second tap on the dots opens the menu. Long-press is left to
-   the browser's native text-callout so users can select message text. */
+/* Hover-revealed action bar on eligible rows (issue #117). A small floating
+   toolbar — same card treatment as the toast stack (bg + border + drop
+   shadow) — anchored to the top-right of the line, floating just above it so
+   the bar barely overlaps the top edge instead of covering the message text.
+   Mobile reaches it via the same sticky-:hover path the old kebab used: iOS
+   Safari's sticky :hover makes the first tap on a row reveal the bar, and a
+   second tap hits an action. Long-press is left to the browser's native
+   text-callout so users can still select message text. */
 .row-actions {
   position: absolute;
-  top: 50%;
-  right: var(--space-2);
-  transform: translateY(-50%);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-  width: 22px;
-  height: 22px;
+  /* Sit the bar fully above the row, then nudge down a few px so its bottom
+     edge just clips the top of the line — anchors it to its own row without
+     obscuring the text. */
+  top: var(--space-2);
+  right: var(--space-3);
+  transform: translateY(-100%);
   display: flex;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  gap: var(--space-1);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  padding: var(--space-1);
   opacity: 0;
   pointer-events: none;
   z-index: var(--z-base);
-  padding: 0;
-  border-radius: var(--radius-sm);
 }
 .line:hover .row-actions,
-.row-actions:focus-visible {
+.row-actions:focus-within {
   opacity: 1;
   pointer-events: auto;
 }
-.row-actions:hover {
+.row-action {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--radius-sm);
+}
+.row-action:hover {
   color: var(--fg);
   background: var(--bg-soft);
+}
+.row-action.active {
+  color: var(--accent);
 }
 
 /* Matched highlight (rule fired): warm background tint. Sits above .alt so
