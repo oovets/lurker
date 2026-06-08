@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 
 const props = withDefaults(
   defineProps<{
@@ -140,7 +140,16 @@ onBeforeUnmount(() => {
 watch(
   () => props.open,
   (v) => {
-    if (v) recomputePosition();
+    if (!v) return;
+    recomputePosition();
+    // Open scrolled to the bottom — the newest entry sits there, nearest the
+    // input, and it's the likeliest recall. Without this the overflow scroller
+    // defaults to the top (oldest), unlike the nick/channel pickers which pull
+    // their best match (rendered at the bottom) into view on open.
+    nextTick(() => {
+      const panel = panelEl.value;
+      if (panel) panel.scrollTop = panel.scrollHeight;
+    });
   },
 );
 </script>
