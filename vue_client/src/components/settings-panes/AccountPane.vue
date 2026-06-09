@@ -105,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../../stores/auth.js';
 import { useConfigStore } from '../../stores/config.js';
@@ -126,10 +126,11 @@ const config = useConfigStore();
 const router = useRouter();
 
 // In node mode the cell only knows a synthetic `acct-N` username; the real
-// account email lives on the control plane, so we fetch it (see onMounted) and
-// prefer it. Standalone has no such concept and resolves immediately.
+// account email lives on the control plane, so we fetch it (see the config
+// watcher below) and prefer it. `identityReady` holds the line until we know
+// what to show, so `acct-N` never flashes before the email resolves.
 const accountEmail = ref<string | null>(null);
-const identityReady = ref(!config.isNode);
+const identityReady = ref(false);
 const identity = computed(() => accountEmail.value || auth.user?.username || '');
 
 const passkeys = ref<PasskeyRow[]>([]);
@@ -153,22 +154,27 @@ const removePasskeyTitle = computed(() => {
   return 'set a password first — this is your only sign-in method';
 });
 
-onMounted(() => {
-  // In node edition sign-in lives at the control plane; the cell exposes no
-  // passkey/password management, so skip those lookups. Instead resolve the
-  // real account email from the control plane to show in place of `acct-N`.
-  if (config.isNode) {
-    resolveHostedIdentity();
-    return;
-  }
-  refreshPasskeys();
-  refreshPasswordStatus();
-});
-
-async function resolveHostedIdentity() {
-  accountEmail.value = await auth.fetchHostedAccountEmail();
-  identityReady.value = true;
-}
+// config.edition is fetched asynchronously and defaults to standalone, so the
+// edition can still be unknown when this pane mounts. Defer setup until config
+// resolves (config.checked), then branch once: a hosted (node) cell pulls the
+// real account email from the control plane (the cell only knows the synthetic
+// acct-N username), while standalone loads its passkey/password management.
+let initialized = false;
+watch(
+  () => config.checked,
+  async (checked) => {
+    if (!checked || initialized) return;
+    initialized = true;
+    if (config.isNode) {
+      accountEmail.value = await auth.fetchHostedAccountEmail();
+    } else {
+      refreshPasskeys();
+      refreshPasswordStatus();
+    }
+    identityReady.value = true;
+  },
+  { immediate: true },
+);
 
 async function refreshPasskeys() {
   try {
