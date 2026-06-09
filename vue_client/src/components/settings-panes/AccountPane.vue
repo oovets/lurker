@@ -263,7 +263,9 @@ async function signOut() {
     // the reverse proxy, which now sees no cp_session and serves the hosted
     // sign-in page. A router.replace would just swap SPA views while leaving the
     // already-loaded app on screen, so the user never appears to sign out.
-    window.location.assign('/');
+    // Use replace(), not assign(): sign-out should leave no history entry that
+    // Back/bfcache could use to flash the signed-in app back onto the screen.
+    window.location.replace('/');
   } else {
     router.replace('/login');
   }

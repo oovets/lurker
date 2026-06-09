@@ -5,7 +5,6 @@ import { defineStore } from 'pinia';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import { api } from '../api.js';
 import { resetSession } from '../composables/useSessionReset.js';
-import { useConfigStore } from './config.js';
 
 export interface AuthUser {
   id: number;
@@ -250,18 +249,19 @@ export const useAuthStore = defineStore('auth', {
         // ignore — local state is still cleared below
       }
       // On a hosted cell the customer also holds a control-plane session
-      // (cp_session) that the reverse proxy minted; the cell's logout above
-      // only clears its own lurker_session. Both cookies are same-origin and
+      // (cp_session) the reverse proxy minted; the cell's logout above only
+      // clears its own lurker_session. Both cookies are same-origin and
       // httpOnly, so the browser can't drop cp_session itself — without this
       // the user stays authenticated to the proxy and /billing, making
-      // sign-out effectively impossible. /_cp/* is always CP-served (never
-      // proxied to the cell), so this reaches the control plane directly.
-      if (useConfigStore().isNode) {
-        try {
-          await api('/_cp/auth/logout', { method: 'POST' });
-        } catch (_err) {
-          // ignore — local state is still cleared below
-        }
+      // sign-out effectively impossible. /_cp/* is always control-plane-served,
+      // never proxied to the cell. We hit it unconditionally rather than gating
+      // on edition: a standalone box has no cp_session and simply 404s here
+      // (caught below), and this stays correct even if /api/config never loaded
+      // — so sign-out can never silently leave cp_session behind.
+      try {
+        await api('/_cp/auth/logout', { method: 'POST' });
+      } catch (_err) {
+        // ignore — no control plane (standalone) or session already gone
       }
       // Clear user before resetSession so any late WS onclose handler sees a
       // null user and skips its 2s reconnect arm.
