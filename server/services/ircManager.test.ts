@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Brad Root
 // SPDX-License-Identifier: MPL-2.0
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { setupTestDb } from '../test-utils/testApp.js';
 
 // The startNetwork gate is the linchpin of the pause feature: a paused account
@@ -11,17 +11,37 @@ import { setupTestDb } from '../test-utils/testApp.js';
 const ctx = setupTestDb('services-ircmanager');
 
 let ircManager: typeof import('./ircManager.js').default;
+let connectScheduler: typeof import('./connectScheduler.js').default;
+let systemLog: typeof import('./systemLog.js').default;
 let createUser: typeof import('../db/users.js').createUser;
 let setUserPaused: typeof import('../db/users.js').setUserPaused;
 let createNetwork: typeof import('../db/networks.js').createNetwork;
 
 beforeAll(async () => {
   ircManager = (await import('./ircManager.js')).default;
+  connectScheduler = (await import('./connectScheduler.js')).default;
+  systemLog = (await import('./systemLog.js')).default;
   ({ createUser, setUserPaused } = await import('../db/users.js'));
   ({ createNetwork } = await import('../db/networks.js'));
 });
 
 afterAll(() => ctx.cleanup());
+
+// Any deferrable startNetwork leaves a launch queued in the process-wide
+// scheduler (and a pending timer). Drain it between tests so a staggered
+// launch never fires against a torn-down connection in a later test.
+afterEach(() => connectScheduler.reset());
+
+// Poll until a condition holds, bounded by a timeout — for awaiting a scheduler
+// timer to fire without betting on a fixed real-time delay (a 0ms timer can
+// slip well past a hard-coded sleep under CI load).
+async function waitUntil(pred: () => boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (!pred()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitUntil: condition not met in time');
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}
 
 describe('ircManager pause linchpin', () => {
   it('startNetwork refuses a paused user and creates no connection', () => {
@@ -83,5 +103,64 @@ describe('ircManager.snapshotForUser offline networks', () => {
     expect(snap).toHaveLength(1);
     expect(snap[0].networkId).toBe(net.id);
     expect(snap[0].state).toBe('disconnected');
+  });
+});
+
+describe('ircManager deferrable connect (issue #236 throttle seam)', () => {
+  function makeAutoconnectNetwork(handle: string) {
+    const user = createUser(handle);
+    const net = createNetwork(user.id, {
+      name: 'n',
+      host: 'irc.example.invalid',
+      port: 6697,
+      tls: true,
+      nick: 'x',
+      autoconnect: true,
+    });
+    if (!net) throw new Error('createNetwork returned undefined');
+    return { user, net };
+  }
+
+  it('deferrable startNetwork enqueues the connect instead of opening a socket synchronously', () => {
+    const { user, net } = makeAutoconnectNetwork('defer-enqueue');
+
+    const before = connectScheduler.pendingCount();
+    const conn = ircManager.startNetwork(user.id, net.id, { deferrable: true });
+
+    // The connection object exists and is registered in the manager, but the
+    // socket-opening launch is queued in the scheduler — not run inline. (The
+    // afterEach reset() cancels the pending timer, so no socket ever opens.)
+    expect(conn).not.toBeNull();
+    expect(ircManager.getConnection(user.id, net.id)).toBe(conn);
+    expect(connectScheduler.pendingCount()).toBe(before + 1);
+
+    // Cancel the queued 0ms launch synchronously, before the timer macrotask can
+    // fire — so this test never opens a real socket to irc.example.invalid.
+    connectScheduler.reset();
+    expect(connectScheduler.pendingCount()).toBe(0);
+  });
+
+  it('a queued launch is skipped when its connection was disposed before its slot fired', async () => {
+    const { user, net } = makeAutoconnectNetwork('defer-disposed');
+
+    const conn = ircManager.startNetwork(user.id, net.id, { deferrable: true });
+    expect(conn).not.toBeNull();
+
+    // Tear the connection down while it still sits in the scheduler queue. The
+    // default singleton fires the first per-host launch on a 0ms timer, so we
+    // dispose first, then let that timer run.
+    ircManager.disposeNetwork(user.id, net.id);
+    expect(conn!.disposed).toBe(true);
+    expect(ircManager.getConnection(user.id, net.id)).toBeNull();
+
+    // Let the scheduler's queued 0ms launch fire — pump() splices the task out
+    // of the queue and runs it, so the count returning to 0 means the launch
+    // ran (and its guard short-circuited).
+    await waitUntil(() => connectScheduler.pendingCount() === 0);
+
+    // The launch guard short-circuited: it ran without ever logging a "Starting
+    // connection" line (which only the connect path emits).
+    const lines = systemLog.getRecent(user.id);
+    expect(lines.some((l) => /Starting connection/.test(l.text))).toBe(false);
   });
 });
