@@ -41,25 +41,25 @@
         <button type="button" class="net-row" @click="$emit('select', net)">
           <span class="net-head">
             <span class="net-name">{{ net.name }}</span>
-            <span class="net-stats">
-              <span
-                v-if="net.users != null"
-                class="stat"
-                :title="`~${net.users.toLocaleString()} users (netsplit.de average)`"
-              >
-                <i class="fa-solid fa-users"></i> {{ formatCount(net.users) }}
-              </span>
-              <span
-                v-if="net.channels != null"
-                class="stat"
-                :title="`~${net.channels.toLocaleString()} channels (netsplit.de average)`"
-              >
-                <i class="fa-solid fa-hashtag"></i> {{ formatCount(net.channels) }}
-              </span>
+            <span v-if="net.tags.length" class="net-tags">
+              <span v-for="tag in net.tags" :key="tag" class="net-tag">{{ tag }}</span>
             </span>
           </span>
-          <span v-if="net.tags.length" class="net-tags">
-            <span v-for="tag in net.tags" :key="tag" class="net-tag">{{ tag }}</span>
+          <span class="net-stats">
+            <span
+              v-if="net.users != null"
+              class="stat"
+              :title="`~${net.users.toLocaleString()} users (netsplit.de average)`"
+            >
+              <i class="fa-solid fa-users"></i> {{ formatCount(net.users) }}
+            </span>
+            <span
+              v-if="net.channels != null"
+              class="stat"
+              :title="`~${net.channels.toLocaleString()} channels (netsplit.de average)`"
+            >
+              <i class="fa-solid fa-hashtag"></i> {{ formatCount(net.channels) }}
+            </span>
           </span>
         </button>
       </li>
@@ -184,7 +184,7 @@ const filtered = computed<BuiltinNetwork[]>(() => {
 }
 .net-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: var(--space-3);
   justify-content: space-between;
 }
@@ -192,20 +192,22 @@ const filtered = computed<BuiltinNetwork[]>(() => {
   color: var(--fg);
   font-weight: 600;
 }
+/* Tags sit top-right opposite the name; wrap toward the right edge. */
+.net-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+/* Counts sit under the name. */
 .net-stats {
   display: flex;
   gap: var(--space-3);
   color: var(--fg-muted);
   white-space: nowrap;
-  flex-shrink: 0;
 }
 .stat i {
   opacity: 0.75;
-}
-.net-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
 }
 .net-tag {
   color: var(--fg-muted);
