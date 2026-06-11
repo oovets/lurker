@@ -361,7 +361,7 @@ watch(activeKey, (next) => {
   } else if (!next && screen.value !== 'list') {
     // The active buffer went away (closed it, or its network was removed) while
     // we were viewing it — activeKey only nulls in those "no buffer" cases, so
-    // fall back to the list instead of stranding the user on an empty buffer/
+    // fall back to the list instead of stranding the user on an empty buffer or
     // members screen (#137). Buffer-to-buffer switches set activeKey directly
     // (no null transition), so this never flickers mid-switch.
     screen.value = 'list';
