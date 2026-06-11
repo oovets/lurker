@@ -8,13 +8,7 @@
     "users": 29173,
     "channels": 20622,
     "saslLikelyRequired": true,
-    "tags": [
-      "foss",
-      "programming",
-      "anime",
-      "gaming",
-      "lurker"
-    ]
+    "tags": ["foss", "programming", "anime", "gaming", "lurker"]
   },
   {
     "name": "Undernet",
@@ -47,9 +41,7 @@
     "users": 9159,
     "channels": 6398,
     "saslLikelyRequired": false,
-    "tags": [
-      "anime"
-    ]
+    "tags": ["anime"]
   },
   {
     "name": "hackint",
@@ -60,11 +52,7 @@
     "users": 10724,
     "channels": 2053,
     "saslLikelyRequired": false,
-    "tags": [
-      "hacking",
-      "security",
-      "tech"
-    ]
+    "tags": ["hacking", "security", "tech"]
   },
   {
     "name": "EFnet",
@@ -75,9 +63,7 @@
     "users": 7741,
     "channels": 4943,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech"
-    ]
+    "tags": ["tech"]
   },
   {
     "name": "Chatzona",
@@ -88,9 +74,7 @@
     "users": 1798,
     "channels": 203,
     "saslLikelyRequired": false,
-    "tags": [
-      "spanish"
-    ]
+    "tags": ["spanish"]
   },
   {
     "name": "QuakeNet",
@@ -101,10 +85,7 @@
     "users": 5189,
     "channels": 5372,
     "saslLikelyRequired": false,
-    "tags": [
-      "gaming",
-      "international"
-    ]
+    "tags": ["gaming", "international"]
   },
   {
     "name": "freenode",
@@ -115,11 +96,7 @@
     "users": 4685,
     "channels": 7541,
     "saslLikelyRequired": false,
-    "tags": [
-      "foss",
-      "programming",
-      "tech"
-    ]
+    "tags": ["foss", "programming", "tech"]
   },
   {
     "name": "DALnet",
@@ -141,9 +118,7 @@
     "users": 392,
     "channels": 198,
     "saslLikelyRequired": false,
-    "tags": [
-      "spanish"
-    ]
+    "tags": ["spanish"]
   },
   {
     "name": "KampungChat",
@@ -154,9 +129,7 @@
     "users": 1946,
     "channels": 350,
     "saslLikelyRequired": false,
-    "tags": [
-      "malay"
-    ]
+    "tags": ["malay"]
   },
   {
     "name": "HybridIRC",
@@ -178,9 +151,7 @@
     "users": 623,
     "channels": 122,
     "saslLikelyRequired": false,
-    "tags": [
-      "italian"
-    ]
+    "tags": ["italian"]
   },
   {
     "name": "GameSurge",
@@ -191,9 +162,7 @@
     "users": 1774,
     "channels": 1438,
     "saslLikelyRequired": false,
-    "tags": [
-      "gaming"
-    ]
+    "tags": ["gaming"]
   },
   {
     "name": "Snoonet",
@@ -215,9 +184,7 @@
     "users": 334,
     "channels": 55,
     "saslLikelyRequired": false,
-    "tags": [
-      "french"
-    ]
+    "tags": ["french"]
   },
   {
     "name": "synIRC",
@@ -239,9 +206,7 @@
     "users": 1424,
     "channels": 1699,
     "saslLikelyRequired": false,
-    "tags": [
-      "gaming"
-    ]
+    "tags": ["gaming"]
   },
   {
     "name": "DigitalIRC",
@@ -263,11 +228,7 @@
     "users": 109,
     "channels": 58,
     "saslLikelyRequired": false,
-    "tags": [
-      "privacy",
-      "programming",
-      "lurker"
-    ]
+    "tags": ["privacy", "programming", "lurker"]
   },
   {
     "name": "OFTC",
@@ -278,11 +239,7 @@
     "users": 18866,
     "channels": 3923,
     "saslLikelyRequired": false,
-    "tags": [
-      "foss",
-      "tech",
-      "linux"
-    ]
+    "tags": ["foss", "tech", "linux"]
   },
   {
     "name": "UniBG",
@@ -293,9 +250,7 @@
     "users": 13579,
     "channels": 653,
     "saslLikelyRequired": false,
-    "tags": [
-      "bulgarian"
-    ]
+    "tags": ["bulgarian"]
   },
   {
     "name": "FreeUniBG",
@@ -306,9 +261,7 @@
     "users": 13528,
     "channels": 651,
     "saslLikelyRequired": false,
-    "tags": [
-      "bulgarian"
-    ]
+    "tags": ["bulgarian"]
   },
   {
     "name": "SkyChatz",
@@ -319,9 +272,7 @@
     "users": 12487,
     "channels": 748,
     "saslLikelyRequired": false,
-    "tags": [
-      "malay"
-    ]
+    "tags": ["malay"]
   },
   {
     "name": "P2P-NET",
@@ -332,10 +283,7 @@
     "users": 7302,
     "channels": 684,
     "saslLikelyRequired": false,
-    "tags": [
-      "filesharing",
-      "international"
-    ]
+    "tags": ["filesharing", "international"]
   },
   {
     "name": "CyberIRC",
@@ -346,9 +294,7 @@
     "users": 4328,
     "channels": 41,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "AyoChat",
@@ -359,10 +305,7 @@
     "users": 4079,
     "channels": 54,
     "saslLikelyRequired": false,
-    "tags": [
-      "support",
-      "international"
-    ]
+    "tags": ["support", "international"]
   },
   {
     "name": "PTirc",
@@ -373,10 +316,7 @@
     "users": 2300,
     "channels": 73,
     "saslLikelyRequired": false,
-    "tags": [
-      "privacy",
-      "portuguese"
-    ]
+    "tags": ["privacy", "portuguese"]
   },
   {
     "name": "Abjects",
@@ -387,10 +327,7 @@
     "users": 1802,
     "channels": 273,
     "saslLikelyRequired": false,
-    "tags": [
-      "filesharing",
-      "international"
-    ]
+    "tags": ["filesharing", "international"]
   },
   {
     "name": "AnimeFriends",
@@ -401,10 +338,7 @@
     "users": 1640,
     "channels": 134,
     "saslLikelyRequired": false,
-    "tags": [
-      "anime",
-      "international"
-    ]
+    "tags": ["anime", "international"]
   },
   {
     "name": "ExplosionIRC",
@@ -415,10 +349,7 @@
     "users": 1584,
     "channels": 68,
     "saslLikelyRequired": false,
-    "tags": [
-      "filesharing",
-      "italian"
-    ]
+    "tags": ["filesharing", "italian"]
   },
   {
     "name": "Chaat",
@@ -429,9 +360,7 @@
     "users": 1199,
     "channels": 185,
     "saslLikelyRequired": false,
-    "tags": [
-      "french"
-    ]
+    "tags": ["french"]
   },
   {
     "name": "IRCHighWay",
@@ -442,9 +371,7 @@
     "users": 1121,
     "channels": 477,
     "saslLikelyRequired": false,
-    "tags": [
-      "filesharing"
-    ]
+    "tags": ["filesharing"]
   },
   {
     "name": "EvoChat",
@@ -455,9 +382,7 @@
     "users": 1112,
     "channels": 211,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "Chattersnet",
@@ -468,9 +393,7 @@
     "users": 1075,
     "channels": 320,
     "saslLikelyRequired": false,
-    "tags": [
-      "dutch"
-    ]
+    "tags": ["dutch"]
   },
   {
     "name": "Nether.RIP",
@@ -481,9 +404,7 @@
     "users": 1048,
     "channels": 18,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "IRC-Nerds",
@@ -494,9 +415,7 @@
     "users": 1024,
     "channels": 207,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech"
-    ]
+    "tags": ["tech"]
   },
   {
     "name": "AllNetwork",
@@ -507,9 +426,7 @@
     "users": 812,
     "channels": 167,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "SceneP2P",
@@ -520,10 +437,7 @@
     "users": 754,
     "channels": 53,
     "saslLikelyRequired": false,
-    "tags": [
-      "filesharing",
-      "international"
-    ]
+    "tags": ["filesharing", "international"]
   },
   {
     "name": "GlobalIRC.it",
@@ -534,9 +448,7 @@
     "users": 721,
     "channels": 23,
     "saslLikelyRequired": false,
-    "tags": [
-      "italian"
-    ]
+    "tags": ["italian"]
   },
   {
     "name": "SlashNET",
@@ -547,10 +459,7 @@
     "users": 717,
     "channels": 293,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "gaming"
-    ]
+    "tags": ["tech", "gaming"]
   },
   {
     "name": "BGirc.com",
@@ -561,9 +470,7 @@
     "users": 707,
     "channels": 224,
     "saslLikelyRequired": false,
-    "tags": [
-      "bulgarian"
-    ]
+    "tags": ["bulgarian"]
   },
   {
     "name": "DejaToons",
@@ -574,10 +481,7 @@
     "users": 689,
     "channels": 60,
     "saslLikelyRequired": false,
-    "tags": [
-      "anime",
-      "retro-computing"
-    ]
+    "tags": ["anime", "retro-computing"]
   },
   {
     "name": "UnifiedChat",
@@ -588,10 +492,7 @@
     "users": 662,
     "channels": 29,
     "saslLikelyRequired": false,
-    "tags": [
-      "support",
-      "international"
-    ]
+    "tags": ["support", "international"]
   },
   {
     "name": "darkfasel.net",
@@ -602,11 +503,7 @@
     "users": 611,
     "channels": 132,
     "saslLikelyRequired": false,
-    "tags": [
-      "security",
-      "privacy",
-      "foss"
-    ]
+    "tags": ["security", "privacy", "foss"]
   },
   {
     "name": "tilde.chat",
@@ -617,12 +514,7 @@
     "users": 592,
     "channels": 252,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "foss",
-      "linux",
-      "international"
-    ]
+    "tags": ["tech", "foss", "linux", "international"]
   },
   {
     "name": "Orixon",
@@ -633,9 +525,7 @@
     "users": 591,
     "channels": 192,
     "saslLikelyRequired": false,
-    "tags": [
-      "italian"
-    ]
+    "tags": ["italian"]
   },
   {
     "name": "FurNet",
@@ -646,10 +536,7 @@
     "users": 586,
     "channels": 413,
     "saslLikelyRequired": false,
-    "tags": [
-      "furry",
-      "international"
-    ]
+    "tags": ["furry", "international"]
   },
   {
     "name": "euIRC",
@@ -660,10 +547,7 @@
     "users": 582,
     "channels": 475,
     "saslLikelyRequired": false,
-    "tags": [
-      "international",
-      "german"
-    ]
+    "tags": ["international", "german"]
   },
   {
     "name": "LinkNet",
@@ -674,10 +558,7 @@
     "users": 553,
     "channels": 416,
     "saslLikelyRequired": false,
-    "tags": [
-      "privacy",
-      "international"
-    ]
+    "tags": ["privacy", "international"]
   },
   {
     "name": "GeekNode",
@@ -688,11 +569,7 @@
     "users": 517,
     "channels": 307,
     "saslLikelyRequired": false,
-    "tags": [
-      "foss",
-      "tech",
-      "french"
-    ]
+    "tags": ["foss", "tech", "french"]
   },
   {
     "name": "GeekShed",
@@ -703,10 +580,7 @@
     "users": 494,
     "channels": 236,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "gaming"
-    ]
+    "tags": ["tech", "gaming"]
   },
   {
     "name": "Global-Irc.Eu",
@@ -717,10 +591,7 @@
     "users": 487,
     "channels": 45,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "international"
-    ]
+    "tags": ["tech", "international"]
   },
   {
     "name": "Sohbet.net",
@@ -731,9 +602,7 @@
     "users": 470,
     "channels": 121,
     "saslLikelyRequired": false,
-    "tags": [
-      "turkish"
-    ]
+    "tags": ["turkish"]
   },
   {
     "name": "BOLChat",
@@ -744,9 +613,7 @@
     "users": 450,
     "channels": 14,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "Abandoned-IRC",
@@ -757,11 +624,7 @@
     "users": 446,
     "channels": 67,
     "saslLikelyRequired": false,
-    "tags": [
-      "filesharing",
-      "gaming",
-      "international"
-    ]
+    "tags": ["filesharing", "gaming", "international"]
   },
   {
     "name": "IRCCloud",
@@ -772,10 +635,7 @@
     "users": 446,
     "channels": 140,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "support"
-    ]
+    "tags": ["tech", "support"]
   },
   {
     "name": "EvilNET",
@@ -786,10 +646,7 @@
     "users": 443,
     "channels": 88,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "international"
-    ]
+    "tags": ["tech", "international"]
   },
   {
     "name": "Shelltalk",
@@ -800,12 +657,7 @@
     "users": 427,
     "channels": 402,
     "saslLikelyRequired": false,
-    "tags": [
-      "foss",
-      "tech",
-      "linux",
-      "international"
-    ]
+    "tags": ["foss", "tech", "linux", "international"]
   },
   {
     "name": "MindForge",
@@ -816,10 +668,7 @@
     "users": 405,
     "channels": 359,
     "saslLikelyRequired": false,
-    "tags": [
-      "foss",
-      "international"
-    ]
+    "tags": ["foss", "international"]
   },
   {
     "name": "Kalbim.Net",
@@ -830,9 +679,7 @@
     "users": 404,
     "channels": 116,
     "saslLikelyRequired": false,
-    "tags": [
-      "turkish"
-    ]
+    "tags": ["turkish"]
   },
   {
     "name": "Net-Tchat",
@@ -843,9 +690,7 @@
     "users": 375,
     "channels": 70,
     "saslLikelyRequired": false,
-    "tags": [
-      "french"
-    ]
+    "tags": ["french"]
   },
   {
     "name": "SorceryNet",
@@ -856,9 +701,7 @@
     "users": 375,
     "channels": 443,
     "saslLikelyRequired": false,
-    "tags": [
-      "gaming"
-    ]
+    "tags": ["gaming"]
   },
   {
     "name": "TransAdvice",
@@ -869,11 +712,7 @@
     "users": 368,
     "channels": 52,
     "saslLikelyRequired": false,
-    "tags": [
-      "support",
-      "activism",
-      "international"
-    ]
+    "tags": ["support", "activism", "international"]
   },
   {
     "name": "RezoSup",
@@ -884,9 +723,7 @@
     "users": 348,
     "channels": 270,
     "saslLikelyRequired": false,
-    "tags": [
-      "french"
-    ]
+    "tags": ["french"]
   },
   {
     "name": "MagNET",
@@ -897,12 +734,7 @@
     "users": 343,
     "channels": 371,
     "saslLikelyRequired": false,
-    "tags": [
-      "programming",
-      "foss",
-      "tech",
-      "international"
-    ]
+    "tags": ["programming", "foss", "tech", "international"]
   },
   {
     "name": "TrendSohbet.Com",
@@ -913,9 +745,7 @@
     "users": 341,
     "channels": 84,
     "saslLikelyRequired": false,
-    "tags": [
-      "turkish"
-    ]
+    "tags": ["turkish"]
   },
   {
     "name": "SwiftIRC",
@@ -926,9 +756,7 @@
     "users": 316,
     "channels": 285,
     "saslLikelyRequired": false,
-    "tags": [
-      "gaming"
-    ]
+    "tags": ["gaming"]
   },
   {
     "name": "AfterNET",
@@ -939,9 +767,7 @@
     "users": 299,
     "channels": 158,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "AllNightCafe",
@@ -952,9 +778,7 @@
     "users": 298,
     "channels": 43,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "DarkMyst",
@@ -976,9 +800,7 @@
     "users": 274,
     "channels": 268,
     "saslLikelyRequired": false,
-    "tags": [
-      "french"
-    ]
+    "tags": ["french"]
   },
   {
     "name": "BrasIRC",
@@ -989,9 +811,7 @@
     "users": 266,
     "channels": 108,
     "saslLikelyRequired": false,
-    "tags": [
-      "portuguese"
-    ]
+    "tags": ["portuguese"]
   },
   {
     "name": "PIRC.pl",
@@ -1002,9 +822,7 @@
     "users": 262,
     "channels": 191,
     "saslLikelyRequired": false,
-    "tags": [
-      "polish"
-    ]
+    "tags": ["polish"]
   },
   {
     "name": "ChatLife",
@@ -1015,9 +833,7 @@
     "users": 257,
     "channels": 64,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "IRCnet2",
@@ -1028,9 +844,7 @@
     "users": 253,
     "channels": 139,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "DarkWorld",
@@ -1041,11 +855,7 @@
     "users": 252,
     "channels": 229,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "foss",
-      "international"
-    ]
+    "tags": ["tech", "foss", "international"]
   },
   {
     "name": "ChatLounge",
@@ -1067,9 +877,7 @@
     "users": 239,
     "channels": 180,
     "saslLikelyRequired": false,
-    "tags": [
-      "portuguese"
-    ]
+    "tags": ["portuguese"]
   },
   {
     "name": "GIMPnet",
@@ -1080,11 +888,7 @@
     "users": 232,
     "channels": 128,
     "saslLikelyRequired": false,
-    "tags": [
-      "foss",
-      "tech",
-      "support"
-    ]
+    "tags": ["foss", "tech", "support"]
   },
   {
     "name": "LunarIRC",
@@ -1106,12 +910,7 @@
     "users": 226,
     "channels": 165,
     "saslLikelyRequired": false,
-    "tags": [
-      "hacking",
-      "security",
-      "tech",
-      "international"
-    ]
+    "tags": ["hacking", "security", "tech", "international"]
   },
   {
     "name": "Smurfnet",
@@ -1122,11 +921,7 @@
     "users": 219,
     "channels": 93,
     "saslLikelyRequired": false,
-    "tags": [
-      "hacking",
-      "privacy",
-      "dutch"
-    ]
+    "tags": ["hacking", "privacy", "dutch"]
   },
   {
     "name": "Atrum",
@@ -1137,9 +932,7 @@
     "users": 209,
     "channels": 158,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "LibraIRC",
@@ -1150,10 +943,7 @@
     "users": 207,
     "channels": 267,
     "saslLikelyRequired": false,
-    "tags": [
-      "international",
-      "support"
-    ]
+    "tags": ["international", "support"]
   },
   {
     "name": "TwistedNet",
@@ -1164,11 +954,7 @@
     "users": 200,
     "channels": 97,
     "saslLikelyRequired": false,
-    "tags": [
-      "privacy",
-      "tech",
-      "international"
-    ]
+    "tags": ["privacy", "tech", "international"]
   },
   {
     "name": "NewNet",
@@ -1179,9 +965,7 @@
     "users": 194,
     "channels": 116,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   },
   {
     "name": "ZEnet",
@@ -1203,11 +987,7 @@
     "users": 186,
     "channels": 64,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech",
-      "gaming",
-      "international"
-    ]
+    "tags": ["tech", "gaming", "international"]
   },
   {
     "name": "WetFish",
@@ -1218,9 +998,7 @@
     "users": 185,
     "channels": 145,
     "saslLikelyRequired": false,
-    "tags": [
-      "tech"
-    ]
+    "tags": ["tech"]
   },
   {
     "name": "Aitvaras",
@@ -1231,9 +1009,7 @@
     "users": 185,
     "channels": 145,
     "saslLikelyRequired": false,
-    "tags": [
-      "lithuanian"
-    ]
+    "tags": ["lithuanian"]
   },
   {
     "name": "German-Elite",
@@ -1244,9 +1020,7 @@
     "users": 179,
     "channels": 78,
     "saslLikelyRequired": false,
-    "tags": [
-      "german"
-    ]
+    "tags": ["german"]
   },
   {
     "name": "GigaIRC",
@@ -1257,8 +1031,6 @@
     "users": 174,
     "channels": 35,
     "saslLikelyRequired": false,
-    "tags": [
-      "international"
-    ]
+    "tags": ["international"]
   }
 ]

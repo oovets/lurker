@@ -36,7 +36,12 @@
       </button>
     </div>
 
-    <div v-if="showFilters && builtinNetworkTags.length" class="tags" role="group" aria-label="Filter by tag">
+    <div
+      v-if="showFilters && builtinNetworkTags.length"
+      class="tags"
+      role="group"
+      aria-label="Filter by tag"
+    >
       <button
         v-for="tag in builtinNetworkTags"
         :key="tag"
@@ -83,9 +88,7 @@
       <li v-if="!filtered.length" class="none">No networks match.</li>
     </ul>
 
-    <button type="button" class="manual" @click="$emit('manual')">
-      Enter details manually →
-    </button>
+    <button type="button" class="manual" @click="$emit('manual')">Enter details manually →</button>
   </div>
 </template>
 

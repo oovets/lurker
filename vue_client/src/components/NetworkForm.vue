@@ -44,10 +44,9 @@
         <input v-model="form.realname" />
       </label>
       <p v-if="showSaslHint" class="sasl-hint">
-        <strong>{{ picked?.name }}</strong> blocks unauthenticated connections from hosted
-        servers, so the SASL account and password below are
-        <strong>not optional</strong> — register your nick with the network first, then enter it
-        here.
+        <strong>{{ picked?.name }}</strong> blocks unauthenticated connections from hosted servers,
+        so the SASL account and password below are <strong>not optional</strong> — register your
+        nick with the network first, then enter it here.
       </p>
       <div class="row">
         <label class="grow">

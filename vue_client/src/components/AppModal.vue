@@ -26,7 +26,12 @@
   >
     <WordBackdrop :word="backdropWord" />
 
-    <div class="card" :class="[`size-${size}`, { 'fill-height': fillHeight }]" tabindex="-1" ref="cardEl">
+    <div
+      class="card"
+      :class="[`size-${size}`, { 'fill-height': fillHeight }]"
+      tabindex="-1"
+      ref="cardEl"
+    >
       <slot name="head">
         <header v-if="title || $slots.title || $slots.subtitle || $slots.actions" class="head">
           <div class="title-wrap">

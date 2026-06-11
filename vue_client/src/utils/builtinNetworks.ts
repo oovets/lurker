@@ -41,8 +41,6 @@ export const builtinNetworks: BuiltinNetwork[] = (data as BuiltinNetwork[]).toSo
 // Distinct browse tags, alphabetised — the picker renders these as filter chips.
 // Derived rather than hardcoded so editing the JSON is enough; LURKER_TAG is
 // excluded (it's shown as a badge, not offered as a filter category).
-export const builtinNetworkTags: string[] = [
-  ...new Set(builtinNetworks.flatMap((n) => n.tags)),
-]
+export const builtinNetworkTags: string[] = [...new Set(builtinNetworks.flatMap((n) => n.tags))]
   .filter((t) => t !== LURKER_TAG)
   .toSorted();
