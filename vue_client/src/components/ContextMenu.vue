@@ -143,14 +143,17 @@ onBeforeUnmount(() => {
      ignores the viewport constraint and sizes to the widest unwrapped item, so
      the clamp logic then sees the real width and repositions correctly. */
   width: max-content;
-  /* --bg-soft elevates the menu visually above the page (which uses --bg) so
-     the popup reads as a distinct surface without needing a visible border
-     (--border resolves to --bg-soft in the default theme, so a plain border
-     against page bg was invisible anyway). The drop shadow + the brighter
-     surface together do the floating-layer job. */
-  background: var(--bg-soft);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
-  padding: 0;
+  /* Same floating-card chrome as the per-message action bar (.row-actions in
+     MessageList.vue): a --bg surface with a real 1px border, rounded corners,
+     and the lighter drop shadow — so both popups read as the same family of
+     floating surface. The vertical padding gives the list breathing room above
+     the first row and below the last; the small horizontal padding insets the
+     rounded item-hover chips from the card edge (Slack-style roomy menu). */
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  padding: var(--space-2) var(--space-1);
   color: var(--fg);
   user-select: none;
 }
@@ -159,12 +162,14 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-5);
   width: 100%;
-  /* Asymmetric horizontal padding: more on the right so the label has
-     breathing room from the menu edge — reads tight at 12px once the menu
-     widens out for a long label. */
-  padding: var(--space-4) var(--space-7) var(--space-4) var(--space-6);
+  /* Roomy padding (Slack-style), kept asymmetric — more on the right so the
+     label has trailing breathing room from the menu edge. */
+  padding: var(--space-4) var(--space-10) var(--space-4) var(--space-7);
   background: none;
   border: none;
+  /* Round the hover/focus fill into a chip inset within the padded card,
+     matching the action bar's rounded row buttons. */
+  border-radius: var(--radius-sm);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -172,12 +177,15 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .item:hover:not(:disabled) {
-  /* Stronger wash now that the surface beneath is --bg-soft rather than --bg,
-     so the hover still reads against the elevated menu colour. */
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  /* Neutral --bg-soft fill on hover, matching the action bar's row buttons:
+     the row quiets to a soft background and the icon (below) pops to accent,
+     rather than washing the whole row in accent. */
+  background: var(--bg-soft);
 }
 .item:hover:not(:disabled) .icon {
-  color: var(--accent);
+  /* Brighten the muted icon to --fg on hover, matching the action bar's row
+     buttons — accent is reserved for active/on states, not plain hover. */
+  color: var(--fg);
 }
 .item:disabled {
   color: var(--fg-muted);
@@ -198,10 +206,11 @@ onBeforeUnmount(() => {
 }
 .divider {
   height: 1px;
-  /* Use --bg as the divider colour now that the menu surface is --bg-soft —
-     a 1px line in the page background colour cuts cleanly through the
-     elevated surface. */
-  background: var(--bg);
-  margin: 0;
+  /* --border cuts a clean line through the --bg card surface (the old --bg
+     divider would now vanish into the matching background). The vertical margin
+     sets the rule apart from the rows above and below it (e.g. between Mute
+     Channel and Close Channel) rather than letting them sit flush against it. */
+  background: var(--border);
+  margin: var(--space-2) 0;
 }
 </style>

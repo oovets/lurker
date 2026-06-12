@@ -56,12 +56,12 @@ export function useBufferActions(): BufferActionsAPI {
         // to match the topic-bar toggle; the label states the action.
         isAlwaysNotify
           ? {
-              label: 'Stop always notifying',
+              label: 'Stop Always Notifying',
               icon: 'fa-solid fa-bell',
               onClick: () => channelNotify.setNotifyAlways(buf.networkId, buf.target, false),
             }
           : {
-              label: 'Always notify',
+              label: 'Always Notify',
               icon: 'fa-regular fa-bell',
               onClick: () => channelNotify.setNotifyAlways(buf.networkId, buf.target, true),
             },
@@ -74,12 +74,12 @@ export function useBufferActions(): BufferActionsAPI {
       items.push(
         isMuted
           ? {
-              label: 'Unmute channel',
+              label: 'Unmute Channel',
               icon: 'fa-solid fa-bell-slash',
               onClick: () => channelNotify.setMuted(buf.networkId, buf.target, false),
             }
           : {
-              label: 'Mute channel',
+              label: 'Mute Channel',
               icon: 'fa-regular fa-bell-slash',
               onClick: () => channelNotify.setMuted(buf.networkId, buf.target, true),
             },
@@ -91,12 +91,12 @@ export function useBufferActions(): BufferActionsAPI {
       // list menu.
       const hasNote = nickNotes.hasNote(buf.networkId, buf.target);
       items.push({
-        label: 'View profile…',
+        label: 'View Profile…',
         icon: 'fa-solid fa-id-card',
         onClick: () => whois.openViewer(buf.networkId, buf.target),
       });
       items.push({
-        label: hasNote ? 'Edit note…' : 'Add note…',
+        label: hasNote ? 'Edit Note…' : 'Add Note…',
         icon: 'fa-solid fa-note-sticky',
         onClick: () => nickNotes.openEditor(buf.networkId, buf.target),
       });

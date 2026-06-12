@@ -107,7 +107,7 @@ export function useMemberActions(): MemberActionsAPI {
     const hasNote = nickNotes.hasNote(ctx.networkId, nick);
     const items: ContextMenuItem[] = [
       {
-        label: 'View profile…',
+        label: 'View Profile…',
         icon: 'fa-solid fa-id-card',
         onClick: () => whois.openViewer(ctx.networkId, nick),
       },
@@ -117,7 +117,7 @@ export function useMemberActions(): MemberActionsAPI {
         onClick: () => buffers.activate(ctx.networkId, nick),
       },
       {
-        label: hasNote ? 'Edit note…' : 'Add note…',
+        label: hasNote ? 'Edit Note…' : 'Add Note…',
         icon: 'fa-solid fa-note-sticky',
         onClick: () => nickNotes.openEditor(ctx.networkId, nick),
       },
@@ -146,7 +146,7 @@ export function useMemberActions(): MemberActionsAPI {
       if (hasAny(selfModes, OP_MODES)) {
         const opped = targetModes.includes('o');
         items.push({
-          label: opped ? 'Take op' : 'Give op',
+          label: opped ? 'Take Op' : 'Give Op',
           icon: 'fa-solid fa-shield-halved',
           onClick: () => send(`MODE ${ch} ${opped ? '-' : '+'}o ${nick}`),
         });
@@ -154,7 +154,7 @@ export function useMemberActions(): MemberActionsAPI {
 
       const voiced = targetModes.includes('v');
       items.push({
-        label: voiced ? 'Remove voice' : 'Give voice',
+        label: voiced ? 'Remove Voice' : 'Give Voice',
         icon: voiced ? 'fa-solid fa-microphone-slash' : 'fa-solid fa-microphone',
         onClick: () => send(`MODE ${ch} ${voiced ? '-' : '+'}v ${nick}`),
       });
@@ -176,7 +176,7 @@ export function useMemberActions(): MemberActionsAPI {
       });
 
       items.push({
-        label: 'Kick + ban…',
+        label: 'Kick + Ban…',
         icon: 'fa-solid fa-user-lock',
         onClick: () => {
           const reason = promptKickReason();
