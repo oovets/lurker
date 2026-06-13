@@ -294,6 +294,28 @@ class IrcManager extends EventEmitter {
     return true;
   }
 
+  // IRC servers don't echo your own NOTICE back (and Lurker doesn't request the
+  // echo-message cap), so — exactly like send/action — we publish a self copy
+  // locally per wire chunk. splitSay applies because NOTICE shares PRIVMSG's
+  // length budget.
+  notice(userId: number, networkId: number, target: string, text: string): boolean {
+    const conn = this.getConnection(userId, networkId);
+    if (!conn) return false;
+    const chunks = splitSay(text);
+    for (const chunk of chunks) {
+      conn.notice(target, chunk);
+      conn.publish({
+        type: 'notice',
+        target,
+        nick: conn.client.user?.nick,
+        text: chunk,
+        kind: 'notice',
+        self: true,
+      });
+    }
+    return true;
+  }
+
   typing(userId: number, networkId: number, target: string, state: string): boolean {
     const conn = this.getConnection(userId, networkId);
     if (!conn) return false;

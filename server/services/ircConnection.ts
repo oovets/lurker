@@ -1799,6 +1799,12 @@ export class IrcConnection {
     if (isDmTargetName(target)) this.trackDmPeer(target);
     this.client.action(target, text);
   }
+  notice(target: string, text: string): void {
+    // Unlike say/action we don't trackDmPeer here: outgoing NOTICEs mirror the
+    // inbound rule (NOTICEs don't establish a tracked DM peer), so notice-ing a
+    // service or bot doesn't spin up presence tracking for it.
+    this.client.notice(target, text);
+  }
   raw(line: string): void {
     // Strip CR/LF/NUL before the line hits the socket. irc-framework's
     // writeLine appends its own \r\n and writes verbatim, so any embedded

@@ -107,6 +107,9 @@ declare module 'irc-framework' {
     /** Send a CTCP ACTION (/me). */
     action(target: string, message: string): void;
 
+    /** Send a NOTICE. */
+    notice(target: string, message: string, tags?: Record<string, string>): void;
+
     /** Send a TAGMSG (IRCv3 message tags with no visible text). */
     tagmsg(target: string, tags?: Record<string, string>): void;
 

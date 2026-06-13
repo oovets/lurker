@@ -12,3 +12,4 @@ import './getNickNote.js';
 import './setNickNote.js';
 import './sendMessage.js';
 import './sendAction.js';
+import './sendNotice.js';

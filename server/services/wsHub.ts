@@ -103,6 +103,7 @@ type WsPayload = Record<string, unknown>;
 const PAUSED_BLOCKED_TYPES = new Set([
   'send',
   'action',
+  'notice',
   'join',
   'open-buffer',
   'close-buffer',
@@ -1153,6 +1154,26 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
             ok: !!result.ok,
             error: result.ok ? undefined : result.error,
           });
+        }
+        break;
+      }
+      case 'notice': {
+        // Fire-and-forget like 'raw': the verb sends the NOTICE and publishes a
+        // self-copy that fans out to every tab, so there's no optimistic bubble
+        // to resolve and no send-result to return. A closed/paused connection
+        // just yields { ok:false } we ignore here, matching raw's best-effort.
+        try {
+          callVerb(
+            'send_notice',
+            { userId, scope: 'read-write', transport: 'ws' },
+            {
+              networkId: msg.networkId,
+              target: msg.target,
+              text: msg.text,
+            },
+          );
+        } catch {
+          /* not-connected / empty — best-effort, nothing to surface */
         }
         break;
       }

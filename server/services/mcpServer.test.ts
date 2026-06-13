@@ -120,6 +120,7 @@ describe('MCP server', () => {
       'search_messages',
       'send_action',
       'send_message',
+      'send_notice',
       'set_nick_note',
     ]);
     // Each entry carries an inputSchema usable by an MCP client.

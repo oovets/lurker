@@ -1613,7 +1613,9 @@ function localInfo(networkId: number, target: string, lineText: string): void {
 const HELP_LINES = [
   'commands:',
   '  /me <text>             — emote in the current buffer',
+  '  /slap <nick>           — slap someone around a bit with a large trout',
   '  /msg <nick> <text>     — open a DM and send (alias: /query)',
+  '  /notice <tgt> <text>   — send a NOTICE to a channel or nick',
   '  /ns <text>             — message NickServ (e.g. identify <pass>)',
   '  /cs <text>             — message ChanServ',
   '  /join <#chan>          — join a channel',
@@ -1624,12 +1626,18 @@ const HELP_LINES = [
   '  /back                  — clear away',
   '  /whois <nick>          — query user info (renders in server buffer)',
   '  /kick <nick> [reason]  — kick from current channel',
+  '  /kickban <nick> [msg]  — kick and ban in one step',
+  '  /op <nick…>            — give op (also /deop /voice /devoice /halfop /dehalfop)',
+  '  /ban <nick|mask>       — ban (also /unban /quiet /unquiet)',
+  '  /cycle [reason]        — part and rejoin this channel (alias: /hop)',
   '  /mode <target> <flags> — set modes (target defaults to current channel)',
   '  /topic [text]          — set/clear topic on current channel',
   '  /nick <newnick>        — change your nick',
   '  /quit [reason]         — disconnect from current network',
   '  /reconnect             — reconnect to current network',
   '  /list                  — list channels on current network',
+  '  /who [mask]            — find users (also /whowas /userhost /ison /names)',
+  '  /motd /version /time   — server info (also /admin /info /lusers /links /map /stats)',
   '  /jitsi                 — start a video call (alias: /talk)',
   '  /ignore [mask]         — list current ignores, or add (nick or nick!user@host)',
   '  /unignore <mask>       — remove an ignore entry',
@@ -1640,6 +1648,41 @@ const HELP_LINES = [
 
 function isChannelTarget(t: string): boolean {
   return typeof t === 'string' && t.startsWith('#');
+}
+
+// Shared builder for the op/voice/ban-family MODE shortcuts (/op, /voice, /ban,
+// …). The channel defaults to the current buffer; an explicit #chan may lead
+// the args (so `/op #other alice` works from anywhere). Each nick/mask consumes
+// one mode letter, so `/op a b` → `MODE #c +oo a b`. Bare nicks passed to +b/+q
+// are left verbatim — ircds auto-complete them to `nick!*@*`.
+function modeShortcut(
+  networkId: number,
+  target: string,
+  rest: string[],
+  sign: '+' | '-',
+  letter: string,
+  usage: string,
+  line: string,
+): boolean {
+  let channel = isChannelTarget(target) ? target : null;
+  let args = rest;
+  if (rest[0] && rest[0].startsWith('#')) {
+    channel = rest[0];
+    args = rest.slice(1);
+  }
+  if (!channel) {
+    localInfo(networkId, target, `${usage} — no channel context`);
+    return true;
+  }
+  if (!args.length) {
+    localInfo(networkId, target, usage);
+    return true;
+  }
+  const flags = sign + letter.repeat(args.length);
+  return sendOrToast(
+    { type: 'raw', networkId, line: `MODE ${channel} ${flags} ${args.join(' ')}` },
+    line,
+  );
 }
 
 function randomRoomId(): string {
@@ -1897,6 +1940,181 @@ function handleCommand(line: string, networkId: number, target: string): boolean
       }
       const url = `https://meet.jit.si/lurker-${randomRoomId()}`;
       return ackedSend({ type: 'send', networkId, target, text: url }, url);
+    }
+    case 'op':
+      return modeShortcut(networkId, target, rest, '+', 'o', 'usage: /op [#chan] <nick…>', line);
+    case 'deop':
+      return modeShortcut(networkId, target, rest, '-', 'o', 'usage: /deop [#chan] <nick…>', line);
+    case 'voice':
+      return modeShortcut(networkId, target, rest, '+', 'v', 'usage: /voice [#chan] <nick…>', line);
+    case 'devoice':
+      return modeShortcut(
+        networkId,
+        target,
+        rest,
+        '-',
+        'v',
+        'usage: /devoice [#chan] <nick…>',
+        line,
+      );
+    case 'halfop':
+      return modeShortcut(
+        networkId,
+        target,
+        rest,
+        '+',
+        'h',
+        'usage: /halfop [#chan] <nick…>',
+        line,
+      );
+    case 'dehalfop':
+      return modeShortcut(
+        networkId,
+        target,
+        rest,
+        '-',
+        'h',
+        'usage: /dehalfop [#chan] <nick…>',
+        line,
+      );
+    case 'ban':
+      return modeShortcut(
+        networkId,
+        target,
+        rest,
+        '+',
+        'b',
+        'usage: /ban [#chan] <nick|mask>',
+        line,
+      );
+    case 'unban':
+      return modeShortcut(networkId, target, rest, '-', 'b', 'usage: /unban [#chan] <mask>', line);
+    case 'quiet':
+      return modeShortcut(
+        networkId,
+        target,
+        rest,
+        '+',
+        'q',
+        'usage: /quiet [#chan] <nick|mask>',
+        line,
+      );
+    case 'unquiet':
+      return modeShortcut(
+        networkId,
+        target,
+        rest,
+        '-',
+        'q',
+        'usage: /unquiet [#chan] <mask>',
+        line,
+      );
+    case 'kickban': {
+      // Ban first (so they can't instantly rejoin), then kick. A leading #chan
+      // is optional; otherwise the current channel is used.
+      let channel = isChannelTarget(target) ? target : null;
+      let args = rest;
+      if (rest[0] && rest[0].startsWith('#')) {
+        channel = rest[0];
+        args = rest.slice(1);
+      }
+      if (!channel) {
+        localInfo(
+          networkId,
+          target,
+          'usage: /kickban [#chan] <nick> [reason] — no channel context',
+        );
+        return true;
+      }
+      const nick = args[0];
+      if (!nick) {
+        localInfo(networkId, target, 'usage: /kickban [#chan] <nick> [reason]');
+        return true;
+      }
+      const reason = args.slice(1).join(' ');
+      const trailer = reason ? ` :${reason}` : '';
+      // The ban send returns false only if the socket is closed — skip the KICK
+      // so we don't half-apply against a dead connection.
+      if (!sendOrToast({ type: 'raw', networkId, line: `MODE ${channel} +b ${nick}` }, line)) {
+        return false;
+      }
+      return sendOrToast(
+        { type: 'raw', networkId, line: `KICK ${channel} ${nick}${trailer}` },
+        line,
+      );
+    }
+    case 'cycle':
+    case 'hop': {
+      // Part then immediately rejoin the CURRENT channel; the whole arg line is
+      // an optional part reason. IRC processes the two lines in order, so no
+      // rejoin race.
+      if (!isChannelTarget(target)) {
+        localInfo(networkId, target, 'usage: /cycle [reason] — run inside a channel');
+        return true;
+      }
+      if (!sendOrToast({ type: 'part', networkId, channel: target, reason: argLine }, line)) {
+        return false;
+      }
+      return sendOrToast({ type: 'raw', networkId, line: `JOIN ${target}` }, line);
+    }
+    case 'notice': {
+      // Routed through the server's send_notice verb (not a raw NOTICE) so it
+      // publishes a self-copy back to every tab — IRC servers don't echo your
+      // own NOTICE, so a raw forward would vanish with nothing in the buffer.
+      const who = rest[0];
+      // Preserve the body's internal spacing by slicing past the target rather
+      // than re-joining the \s+-split rest (mirrors /topic).
+      const body = line
+        .slice(1 + cmd.length)
+        .trim()
+        .slice(who?.length ?? 0)
+        .trim();
+      if (!who || !body) {
+        localInfo(networkId, target, 'usage: /notice <target> <text>');
+        return true;
+      }
+      return sendOrToast({ type: 'notice', networkId, target: who, text: body }, body);
+    }
+    case 'slap': {
+      // mIRC's classic: a CTCP ACTION with the canonical trout line, so it rides
+      // the same path as /me into the current channel or DM.
+      if (isServer.value) {
+        localInfo(networkId, target, 'usage: /slap <nick> — run inside a channel or DM');
+        return true;
+      }
+      const who = rest[0];
+      if (!who) {
+        localInfo(networkId, target, 'usage: /slap <nick>');
+        return true;
+      }
+      const slapText = `slaps ${who} around a bit with a large trout`;
+      return ackedSend({ type: 'action', networkId, target, text: slapText }, slapText);
+    }
+    // Info/query commands. These already function via the raw fallback now that
+    // unhandled server numerics surface in the server buffer (#269) — listing
+    // them explicitly uppercases the verb, documents them in /help, and gives a
+    // single home for any future per-command argument handling. Each forwards
+    // its IRC verb plus whatever args were typed (server/target/mask/nick…); a
+    // missing-arg server error (e.g. bare /whowas) now surfaces on its own.
+    case 'time':
+    case 'version':
+    case 'motd':
+    case 'names':
+    case 'who':
+    case 'whowas':
+    case 'admin':
+    case 'info':
+    case 'lusers':
+    case 'links':
+    case 'map':
+    case 'stats':
+    case 'userhost':
+    case 'ison': {
+      const verb = cmd.toUpperCase();
+      return sendOrToast(
+        { type: 'raw', networkId, line: argLine ? `${verb} ${argLine}` : verb },
+        line,
+      );
     }
     case 'help':
       for (const helpLine of HELP_LINES) localInfo(networkId, target, helpLine);

@@ -411,6 +411,35 @@ describe('send_message / send_action', () => {
     expect(result).toEqual({ ok: false, error: 'not-connected' });
   });
 
+  it('send_notice shares the same error shape', () => {
+    const result = callVerb('send_notice', rwCtx(owner.id), {
+      networkId: net.id,
+      target: '#chan',
+      text: 'heads up',
+    });
+    expect(result).toEqual({ ok: false, error: 'not-connected' });
+  });
+
+  it('send_notice is rejected for read-only scope', () => {
+    expect(() =>
+      callVerb('send_notice', rCtx(owner.id), {
+        networkId: net.id,
+        target: '#chan',
+        text: 'heads up',
+      }),
+    ).toThrow(/scope insufficient/);
+  });
+
+  it('send_notice rejects empty target or text', () => {
+    expect(
+      callVerb('send_notice', rwCtx(owner.id), {
+        networkId: net.id,
+        target: '',
+        text: 'hi',
+      }),
+    ).toEqual({ ok: false, error: 'empty-target-or-text' });
+  });
+
   it('send_message is rejected for read-only scope', () => {
     expect(() =>
       callVerb('send_message', rCtx(owner.id), {
