@@ -166,6 +166,10 @@ function nickClass(t: ContactTarget): Record<string, boolean> {
   flex-direction: column;
   gap: var(--space-4);
 }
+/* First card sits up near the topic bar — only the container padding above it. */
+.card:first-child {
+  padding-top: 0;
+}
 .card + .card {
   border-top: 1px solid var(--border);
 }
