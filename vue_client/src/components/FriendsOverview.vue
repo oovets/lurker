@@ -23,16 +23,16 @@
         <div class="card-head">
           <span class="dot" :class="friends.primaryPresence(c.id)"></span>
           <span class="name">{{ c.displayName }}</span>
-          <span class="spacer"></span>
           <button
             type="button"
-            class="icon-btn"
+            class="icon-btn edit"
             title="Edit friend"
             aria-label="Edit friend"
             @click="friends.openEditorForContact(c)"
           >
-            <i class="fa-solid fa-user-pen"></i>
+            <i class="fa-solid fa-pencil"></i>
           </button>
+          <span class="spacer"></span>
           <button
             type="button"
             class="icon-btn"
@@ -47,8 +47,10 @@
         <ul class="targets">
           <li v-for="t in c.targets" :key="`${t.networkId}::${t.nick}`" class="target">
             <span class="dot small" :class="friends.presenceForTarget(t.networkId, t.nick)"></span>
-            <span class="net">{{ networkName(t.networkId) }}</span>
-            <span class="nick" :class="nickClass(t)">{{ t.nick }}</span>
+            <span class="target-label"
+              ><span class="net">{{ networkName(t.networkId) }}/</span
+              ><span class="nick" :class="nickClass(t)">{{ t.nick }}</span></span
+            >
             <span class="spacer"></span>
             <span class="row-actions">
               <button
@@ -155,14 +157,16 @@ function nickClass(t: ContactTarget): Record<string, boolean> {
   max-width: 30rem;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
 }
+/* No card border — a thin separator between cards instead. */
 .card {
-  border: 1px solid var(--border);
-  padding: var(--space-5);
+  padding: var(--space-5) 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+.card + .card {
+  border-top: 1px solid var(--border);
 }
 .card-head {
   display: flex;
@@ -171,6 +175,10 @@ function nickClass(t: ContactTarget): Record<string, boolean> {
 }
 .card-head .name {
   font-weight: 700;
+}
+/* Pencil hugs the name (editing the friend's name); search sits on the far right. */
+.card-head .edit {
+  margin-left: calc(-1 * var(--space-1));
 }
 .dot {
   width: 8px;
@@ -208,8 +216,14 @@ function nickClass(t: ContactTarget): Record<string, boolean> {
   align-items: center;
   gap: var(--space-3);
 }
+/* network/nick motif, like a DM in the status bar — network (with slash) muted. */
+.target-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .target .net {
-  min-width: 8em;
   color: var(--fg-muted);
 }
 /* Nick carries presence, mirroring DM rows in the buffer list. */
