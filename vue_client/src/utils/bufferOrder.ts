@@ -41,6 +41,10 @@ interface BufferOrderArgs {
   friends?: FriendsOrder;
 }
 
+// Sentinel network id for the FRIENDS group — its members carry their real
+// networkId for activation but nav-group together, apart from that network.
+export const FRIENDS_GROUP_ID = 0;
+
 interface BufferOrderEntry {
   networkId: string | number;
   target: string;
@@ -48,6 +52,10 @@ interface BufferOrderEntry {
   // a flat sentinel (e.g. ':friends:') for virtual ones. Callers match the
   // active buffer and re-activate against this rather than recomputing.
   key: string;
+  // Navigation group for per-network (Alt+Up/Down) scoping. Equals networkId
+  // for real buffers; FRIENDS_GROUP_ID for the feed + friend DMs, so cycling a
+  // network never wanders into the FRIENDS group and vice-versa.
+  groupId: string | number;
 }
 
 function isServerTarget(target: string): boolean {
@@ -79,16 +87,32 @@ export function flattenBufferOrder({
     !!exclude && exclude.has(`${networkId}::${target.toLowerCase()}`);
 
   // FRIENDS group first (matches the sidebar): feed header, then friend DMs.
+  // All carry FRIENDS_GROUP_ID so per-network nav treats them as one group.
   if (friends?.feedKey) {
-    out.push({ networkId: 0, target: friends.feedKey, key: friends.feedKey });
+    out.push({
+      networkId: 0,
+      target: friends.feedKey,
+      key: friends.feedKey,
+      groupId: FRIENDS_GROUP_ID,
+    });
   }
   for (const dm of friends?.dms || []) {
-    out.push({ networkId: dm.networkId, target: dm.target, key: `${dm.networkId}::${dm.target}` });
+    out.push({
+      networkId: dm.networkId,
+      target: dm.target,
+      key: `${dm.networkId}::${dm.target}`,
+      groupId: FRIENDS_GROUP_ID,
+    });
   }
 
   for (const net of networks) {
     const serverTarget = `:server:${net.id}`;
-    out.push({ networkId: net.id, target: serverTarget, key: `${net.id}::${serverTarget}` });
+    out.push({
+      networkId: net.id,
+      target: serverTarget,
+      key: `${net.id}::${serverTarget}`,
+      groupId: net.id,
+    });
 
     const pinnedTargets = pins.forNetwork(net.id) || [];
     const pinnedSet = new Set(pinnedTargets);
@@ -98,7 +122,7 @@ export function flattenBufferOrder({
 
     for (const t of pinnedTargets) {
       if (byTarget.has(t) && !isExcluded(net.id, t))
-        out.push({ networkId: net.id, target: t, key: `${net.id}::${t}` });
+        out.push({ networkId: net.id, target: t, key: `${net.id}::${t}`, groupId: net.id });
     }
 
     const unpinned = all
@@ -113,7 +137,12 @@ export function flattenBufferOrder({
         return sortKey(a.target).localeCompare(sortKey(b.target));
       });
     for (const b of unpinned)
-      out.push({ networkId: net.id, target: b.target, key: `${net.id}::${b.target}` });
+      out.push({
+        networkId: net.id,
+        target: b.target,
+        key: `${net.id}::${b.target}`,
+        groupId: net.id,
+      });
   }
   return out;
 }

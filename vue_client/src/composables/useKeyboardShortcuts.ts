@@ -7,7 +7,7 @@ import { useBuffersStore } from '../stores/buffers.js';
 import { usePinsStore } from '../stores/pins.js';
 import { useFriendsStore } from '../stores/friends.js';
 import { socketSend } from './useSocket.js';
-import { flattenBufferOrder, flattenUnreadOrder } from '../utils/bufferOrder.js';
+import { flattenBufferOrder, flattenUnreadOrder, FRIENDS_GROUP_ID } from '../utils/bufferOrder.js';
 import { FRIENDS_KEY } from '../lib/virtualBuffers.js';
 
 export interface KeyboardShortcutsOptions {
@@ -82,16 +82,23 @@ export function useKeyboardShortcuts({
     else buffers.activate(entry.networkId, entry.target);
   }
 
-  function activeNetworkId(): number | null {
-    const a = networks.activeBuffer;
-    return a?.networkId ?? null;
+  // The nav group of the active buffer for per-network (Alt+Up/Down) scoping.
+  // The FRIENDS feed and any friend's primary DM resolve to FRIENDS_GROUP_ID so
+  // cycling that group stays in it — and cycling a real network skips it —
+  // rather than friend DMs leaking into their underlying network's rotation.
+  function activeGroupId(): string | number | null {
+    const key = networks.activeKey;
+    if (!key) return null;
+    if (key === FRIENDS_KEY) return FRIENDS_GROUP_ID;
+    if (friends.primaryDmKeys.has(key.toLowerCase())) return FRIENDS_GROUP_ID;
+    return networks.activeBuffer?.networkId ?? null;
   }
 
   function step(delta: number, scope: string): void {
     let list = order();
     if (scope === 'network') {
-      const nid = activeNetworkId();
-      if (nid != null) list = list.filter((e) => e.networkId === nid);
+      const gid = activeGroupId();
+      if (gid != null) list = list.filter((e) => e.groupId === gid);
     } else if (scope === 'unread') {
       list = unreadOrder();
     }
