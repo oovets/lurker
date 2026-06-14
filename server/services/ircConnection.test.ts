@@ -6,6 +6,7 @@ import { ircLineParser } from 'irc-framework';
 import {
   canonicalChannelTarget,
   computeFallbackNick,
+  formatWhoisRaw,
   formatServerNumeric,
   formatUnknownNumeric,
   joinRejectionMessage,
@@ -229,5 +230,23 @@ describe('canonicalChannelTarget (#268)', () => {
     expect(canonicalChannelTarget('SomeNick', channels)).toBe('SomeNick');
     expect(canonicalChannelTarget(':server:7', channels)).toBe(':server:7');
     expect(canonicalChannelTarget(undefined, channels)).toBeUndefined();
+  });
+});
+
+describe('formatWhoisRaw', () => {
+  it('formats the raw whois payload as a single server-buffer line', () => {
+    expect(
+      formatWhoisRaw({
+        nick: 'alice',
+        ident: 'a',
+        hostname: 'host.example',
+        channels: '#a #b',
+      }),
+    ).toBe('WHOIS alice: {"nick":"alice","ident":"a","hostname":"host.example","channels":"#a #b"}');
+  });
+
+  it('returns null for missing nick', () => {
+    expect(formatWhoisRaw({ ident: 'a' })).toBeNull();
+    expect(formatWhoisRaw(null)).toBeNull();
   });
 });

@@ -1371,13 +1371,16 @@ export class IrcConnection {
     // irc-framework aggregates RPL_WHOIS* (311/312/317/319/330/...) into a
     // single 'whois' event when RPL_ENDOFWHOIS arrives. We fan it out as a
     // structured `whois_result` event so the client can render it in the
-    // user-profile modal (issue #92). It's ephemeral — the modal pulls it
-    // from a per-nick cache, no scrollback noise. `error: 'not_found'`
+    // user-profile modal (issue #92), and we also mirror the raw payload into
+    // the server buffer for debugging/thoroughness (#281). `error: 'not_found'`
     // surfaces here too (irc-framework synthesizes a whois event with that
     // shape on ERR_NOSUCHNICK) so the modal can flip to its empty state.
     c.on('whois', (event: Record<string, unknown>) => {
       if (!event || !event.nick) return;
       this.publishEphemeral({ type: 'whois_result', whois: event });
+      const text = formatWhoisRaw(event);
+      if (!text) return;
+      this.publish({ type: 'motd', target: this.serverTarget(), text });
     });
 
     // Channel list (`/LIST`). irc-framework batches RPL_LIST every 50 rows and
@@ -2107,6 +2110,22 @@ export function computeFallbackNick(
   if (!base) return null;
   if (attemptIndex < 0 || attemptIndex >= NICK_FALLBACK_MAX) return null;
   return `${base}${attemptIndex + 1}`;
+}
+
+export function formatWhoisRaw(
+  whois: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!whois) return null;
+  const nick = whois.nick;
+  if (typeof nick !== 'string' || !nick) return null;
+  const payload = Object.fromEntries(
+    Object.entries(whois).filter(([, value]) => value !== undefined),
+  );
+  try {
+    return `WHOIS ${nick}: ${JSON.stringify(payload)}`;
+  } catch (_) {
+    return `WHOIS ${nick}`;
+  }
 }
 
 // Convert a server-sourced numeric reply (parsed IrcMessage) into a single
