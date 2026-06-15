@@ -58,18 +58,24 @@
         >
       </div>
       <div class="bar-tools">
-        <!-- @mousedown.prevent keeps the composer focused (and the iOS keyboard
-             up) when tapping these tools — same affordance as the send button. -->
+        <!-- No @mousedown.prevent here (unlike the palette/send buttons): this
+             opens the native iOS file picker, which dismisses the soft keyboard
+             no matter what. Preventing the tap-blur only delays that dismissal a
+             beat — keyboard stays up, then drops as the picker sheet animates in
+             — which reads as jank. Letting the tap blur gives one clean
+             dismissal instead. -->
         <button
           type="button"
           class="tool-btn"
           :disabled="!sendable"
           title="upload image"
-          @mousedown.prevent
           @click="onPickFile"
         >
           <i class="fa-solid fa-paperclip"></i>
         </button>
+        <!-- @mousedown.prevent keeps the composer focused (and the iOS keyboard
+             up): this opens the in-app colour picker overlay, not a native
+             sheet, so the keyboard should stay — same affordance as send. -->
         <button
           v-if="showFormatButton"
           type="button"
