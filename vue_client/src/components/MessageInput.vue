@@ -45,6 +45,7 @@
       class="send-btn"
       :disabled="!sendable"
       title="send message"
+      @mousedown.prevent
       @click="submit"
     >
       <i class="fa-solid fa-circle-arrow-up"></i>
