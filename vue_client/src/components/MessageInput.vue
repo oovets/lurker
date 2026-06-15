@@ -253,12 +253,13 @@ const placeholder = computed(() => {
   // server buffer is exactly where someone goes looking for it.
   if (isServer.value) return 'try /help';
   // Mobile shows network/channel in the compact status bar now, so the
-  // placeholder carries the self identity (nick + channel-prefix + user modes)
-  // instead, with the away marker appended when set — mirroring what the input
-  // prompt renders on desktop. Desktop keeps `try /help` since the prompt
+  // placeholder carries the self identity (nick + channel-prefix) instead, with
+  // the away marker appended when set. User modes are dropped here to match the
+  // compact status bar hiding channel modes on narrow screens; the desktop
+  // prompt still renders them. Desktop keeps `try /help` since the prompt
   // already shows the identity there.
   if (isMobile.value) {
-    const self = promptLabel.value;
+    const self = promptLabelNoModes.value;
     return awayLabel.value ? `${self} ${awayLabel.value}` : self;
   }
   return 'try /help';
@@ -285,9 +286,9 @@ const systemFeatures = computed(() => {
 // Prompt identity (nick + channel prefix + user modes) and away marker — see
 // useSelfLabel. On mobile we don't render the prompt label inline here (the
 // template gates it on !isMobile so the input row stays just `>` + composer);
-// instead it feeds the placeholder above, since the compact status bar now
-// shows network/channel rather than the self identity.
-const { promptLabel, awayLabel } = useSelfLabel();
+// instead the modeless variant feeds the placeholder above, since the compact
+// status bar now shows network/channel rather than the self identity.
+const { promptLabel, promptLabelNoModes, awayLabel } = useSelfLabel();
 const { isMobile } = useViewport();
 
 let typingState: string | null = null;

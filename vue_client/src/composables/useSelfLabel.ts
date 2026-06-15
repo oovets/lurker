@@ -8,6 +8,7 @@ import { useBuffersStore } from '../stores/buffers.js';
 
 export interface SelfLabelState {
   promptLabel: ComputedRef<string>;
+  promptLabelNoModes: ComputedRef<string>;
   awayLabel: ComputedRef<string>;
 }
 
@@ -41,14 +42,23 @@ export function useSelfLabel(): SelfLabelState {
     return '';
   });
 
-  const promptLabel = computed(() => {
-    if (!active.value) return '—';
-    const state = networks.states[active.value.networkId];
-    const nick = state?.nick;
+  // Identity without the trailing user-mode parens. Feeds the mobile input
+  // placeholder, which mirrors the compact status bar's choice to drop modes
+  // on narrow screens; the desktop prompt (promptLabel) keeps them.
+  const promptLabelNoModes = computed(() => {
+    const a = active.value;
+    if (!a) return '—';
+    const nick = networks.states[a.networkId]?.nick;
     if (!nick) return '—';
-    const modes = state?.userModes || '';
-    const parens = modes ? `(${modes})` : '';
-    return `${channelPrefix.value}${nick}${parens}`;
+    return `${channelPrefix.value}${nick}`;
+  });
+
+  const promptLabel = computed(() => {
+    const base = promptLabelNoModes.value;
+    const a = active.value;
+    if (!a || base === '—') return base;
+    const modes = networks.states[a.networkId]?.userModes || '';
+    return modes ? `${base}(${modes})` : base;
   });
 
   const awayLabel = computed(() => {
@@ -60,5 +70,5 @@ export function useSelfLabel(): SelfLabelState {
     return away?.active && away.message ? `(${away.message})` : '';
   });
 
-  return { promptLabel, awayLabel };
+  return { promptLabel, promptLabelNoModes, awayLabel };
 }
