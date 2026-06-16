@@ -163,10 +163,10 @@ watch(
   margin: 0 auto;
   max-height: 50vh;
   overflow-y: auto;
-  background: var(--bg-soft);
+  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover-up);
   z-index: var(--z-popover);
 }
 .row {
@@ -175,17 +175,14 @@ watch(
   padding: var(--space-6);
   min-height: 44px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border);
   user-select: none;
-}
-.row:last-child {
-  border-bottom: none;
 }
 /* Tap-only menu — no externally driven activeIndex to coordinate with, so a
    plain :hover highlight is fine (unlike the nick/channel pickers, which avoid
-   :hover to dodge double-highlighting during keyboard nav). */
+   :hover to dodge double-highlighting during keyboard nav). Soft neutral fill
+   matches the context menu / Cmd-K list. */
 .row:hover {
-  background: var(--bg);
+  background: var(--bg-soft);
 }
 /* Recalled lines can be long — keep each row to a single line, clipped with an
    ellipsis. The full text is in the row's title and lands in the composer on

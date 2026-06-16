@@ -605,6 +605,17 @@
     "tags": ["turkish"]
   },
   {
+    "name": "IRC4Fun",
+    "host": "irc.irc4fun.net",
+    "port": 6697,
+    "tls": true,
+    "website": "https://www.irc4fun.net/",
+    "users": 470,
+    "channels": 220,
+    "saslLikelyRequired": false,
+    "tags": ["activism", "international", "tech"]
+  },
+  {
     "name": "BOLChat",
     "host": "irc.bol-chat.com",
     "port": 6667,

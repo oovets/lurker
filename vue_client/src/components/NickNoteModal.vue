@@ -5,27 +5,29 @@
 
 <template>
   <AppModal word="note" :title="`note on ${nick}`" size="md" @close="onClose">
-    <form class="body" @submit.prevent="confirm">
-      <textarea
-        ref="inputEl"
-        v-model="draft"
-        spellcheck="true"
-        autocapitalize="sentences"
-        rows="8"
-        :maxlength="MAX_LEN"
-        placeholder="e.g. lives in Berlin, works at Acme, spouse: Pat…"
-      ></textarea>
-      <p class="meta">
-        <span v-if="entry?.updatedAt">Updated {{ formattedUpdatedAt }}</span>
-        <span v-else>Notes are private to you and synced across your devices.</span>
-      </p>
-      <div class="actions">
+    <form class="modal-form" @submit.prevent="confirm">
+      <div class="body">
+        <textarea
+          ref="inputEl"
+          v-model="draft"
+          spellcheck="true"
+          autocapitalize="sentences"
+          rows="8"
+          :maxlength="MAX_LEN"
+          placeholder="e.g. lives in Berlin, works at Acme, spouse: Pat…"
+        ></textarea>
+        <p class="meta">
+          <span v-if="entry?.updatedAt">Updated {{ formattedUpdatedAt }}</span>
+          <span v-else>Notes are private to you and synced across your devices.</span>
+        </p>
+      </div>
+      <footer class="modal-footer">
         <button type="button" class="btn-secondary" @click="onClose">Cancel</button>
         <button v-if="hasExistingNote" type="button" class="btn-secondary danger" @click="onDelete">
           Delete
         </button>
         <button type="submit" class="btn-primary" :disabled="!dirty">Save</button>
-      </div>
+      </footer>
     </form>
   </AppModal>
 </template>
@@ -90,6 +92,12 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Breathing room so the last content doesn't butt against the footer divider
+     when scrolled to the bottom. */
+  padding-bottom: var(--space-7);
 }
 textarea {
   background: var(--bg-soft);
@@ -107,41 +115,5 @@ textarea:focus {
 .meta {
   margin: 0;
   color: var(--fg-muted);
-}
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
-}
-.btn-primary,
-.btn-secondary {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: var(--space-3) var(--space-6);
-  cursor: pointer;
-  font: inherit;
-}
-.btn-primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn-primary:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.btn-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-}
-.btn-secondary:hover {
-  background: var(--bg-soft);
-}
-.btn-secondary.danger {
-  color: var(--bad);
-  border-color: var(--bad);
-}
-.btn-secondary.danger:hover {
-  background: color-mix(in srgb, var(--bad) 15%, transparent);
 }
 </style>

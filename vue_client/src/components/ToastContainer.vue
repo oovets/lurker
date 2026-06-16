@@ -66,7 +66,7 @@ function onClick(t: Toast) {
   border: 1px solid var(--border);
   border-left: 4px solid var(--toast-accent, var(--accent));
   padding: var(--space-5) var(--space-6);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-popover);
   color: var(--fg);
   animation: toast-in 160ms ease-out;
 }

@@ -4,7 +4,7 @@
 -->
 
 <template>
-  <AppModal word="bookmarks" title="bookmarks" size="lg" align="top" @close="$emit('close')">
+  <AppModal word="bookmarks" title="bookmarks" size="lg" fill-height @close="$emit('close')">
     <p v-if="store.error" class="error inline">{{ store.error }}</p>
     <ul v-if="visibleItems.length" class="match-list">
       <HistoryMessageRow

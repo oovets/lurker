@@ -1396,7 +1396,7 @@ watch(
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-popover);
   padding: var(--space-1);
   opacity: 0;
   pointer-events: none;

@@ -12,7 +12,7 @@
 -->
 
 <template>
-  <li :class="{ row: true, active }" @click="$emit('jump', message)" @mouseenter="$emit('hover')">
+  <li class="row" @click="$emit('jump', message)">
     <div class="head">
       <div class="where">
         <template v-if="targetLabel"
@@ -21,23 +21,25 @@
         >
         <span v-else class="net">{{ networkLabel }}</span>
       </div>
-      <span class="time">{{ time }}</span>
+      <div class="meta">
+        <span class="time">{{ time }}</span>
+        <button
+          v-if="removable"
+          type="button"
+          class="remove"
+          title="Remove"
+          aria-label="Remove"
+          @click.stop="$emit('remove', message)"
+        >
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
     </div>
     <div class="body">
       <span class="nick" :style="nickStyle">{{ message.nick }}</span>
       <span class="sep">|</span>
       <span class="text"><LinkedText :text="message.text ?? ''" /></span>
     </div>
-    <button
-      v-if="removable"
-      type="button"
-      class="remove"
-      title="Remove"
-      aria-label="Remove"
-      @click.stop="$emit('remove', message)"
-    >
-      <i class="fa-solid fa-xmark"></i>
-    </button>
   </li>
 </template>
 
@@ -68,15 +70,13 @@ export interface HistoryMessage {
 const props = withDefaults(
   defineProps<{
     message: HistoryMessage;
-    active?: boolean;
     removable?: boolean;
   }>(),
-  { active: false, removable: false },
+  { removable: false },
 );
 
 defineEmits<{
   jump: [message: HistoryMessage];
-  hover: [];
   remove: [message: HistoryMessage];
 }>();
 
@@ -126,43 +126,15 @@ const nickStyle = computed((): CSSProperties | null => {
 
 <style scoped>
 .row {
-  position: relative;
-  padding: var(--space-4) var(--space-5);
+  /* No horizontal padding — the list already insets to the card's content edge
+     (padding: 0 var(--card-pad-x) on its scroll container), so the row content
+     sits flush with its full-width separators rather than adding a second inset.
+     Roomy padding-bottom above the separator plus a margin below it space the
+     rows well apart. */
+  padding: var(--space-4) 0 var(--space-8);
   border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-4);
   cursor: pointer;
-}
-.row:hover,
-.row.active {
-  background: var(--bg-soft);
-}
-
-.remove {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  padding: 0;
-  border-radius: var(--radius-sm);
-}
-.row:hover .remove {
-  opacity: 1;
-}
-.remove:hover {
-  color: var(--bad);
-}
-@media (hover: none) {
-  .remove {
-    opacity: 1;
-  }
 }
 
 .head {
@@ -172,6 +144,25 @@ const nickStyle = computed((): CSSProperties | null => {
   gap: var(--space-4);
   color: var(--fg-muted);
   margin-bottom: var(--space-3);
+}
+/* Time + remove icon, grouped at the right edge of the header strip — the
+   xmark sits in the top-right corner and the date is nudged left to clear it. */
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  flex-shrink: 0;
+}
+.remove {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.remove:hover {
+  color: var(--bad);
 }
 .where {
   min-width: 0;
@@ -193,11 +184,17 @@ const nickStyle = computed((): CSSProperties | null => {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.nick {
-  font-weight: 600;
-}
 .sep {
   color: var(--border);
   margin: 0 0.5ch;
+}
+/* Mirror the channel-list rows: the message text sits at the secondary fg and
+   lifts to full fg on row hover, so the row still has a hover tell even though
+   the nick keeps its own color. */
+.text {
+  color: var(--fg-muted);
+}
+.row:hover .text {
+  color: var(--fg);
 }
 </style>

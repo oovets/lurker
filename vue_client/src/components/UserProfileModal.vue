@@ -16,19 +16,24 @@
 -->
 
 <template>
-  <AppModal word="profile" :title="nick" size="md" align="top" @close="onClose">
-    <template #subtitle>
-      <span :class="['presence', presenceClass]">
-        <span class="dot" aria-hidden="true"></span>
-        {{ presenceLabel }}
-      </span>
-      <span v-if="awayMessage" class="away-msg">— {{ awayMessage }}</span>
+  <AppModal word="profile" size="md" @close="onClose">
+    <template #title>
+      <h2>
+        <span
+          class="dot"
+          :class="presenceClass"
+          role="img"
+          :aria-label="presenceLabel"
+          :title="presenceLabel"
+        ></span
+        >{{ nick }}<span v-if="awayMessage" class="away">&nbsp;({{ awayMessage }})</span>
+      </h2>
     </template>
 
     <div class="body">
-      <!-- Identity -->
-      <section v-if="hasIdentity" class="section">
-        <h3>Identity</h3>
+      <!-- Identity + activity merged into one headerless table; the status pills
+           sit under the table (below Channels), then the note section follows. -->
+      <section v-if="hasDetails" class="section">
         <dl>
           <template v-if="whois?.real_name">
             <dt>Real name</dt>
@@ -53,18 +58,13 @@
             <dt>Account</dt>
             <dd>{{ whois.account }}</dd>
           </template>
-        </dl>
-        <div v-if="chips.length" class="chips">
-          <span v-for="c in chips" :key="c.label" :class="['chip', c.tone]">
-            <i v-if="c.icon" :class="c.icon"></i> {{ c.label }}
-          </span>
-        </div>
-      </section>
-
-      <!-- Activity -->
-      <section v-if="hasActivity" class="section">
-        <h3>Activity</h3>
-        <dl>
+          <template v-if="whois?.server">
+            <dt>Server</dt>
+            <dd>
+              {{ whois.server }}
+              <span v-if="whois.server_info" class="muted">({{ whois.server_info }})</span>
+            </dd>
+          </template>
           <template v-if="idleLabel">
             <dt>Idle</dt>
             <dd>{{ idleLabel }}</dd>
@@ -72,13 +72,6 @@
           <template v-if="signonLabel">
             <dt>Signed on</dt>
             <dd>{{ signonLabel }}</dd>
-          </template>
-          <template v-if="whois?.server">
-            <dt>Server</dt>
-            <dd>
-              {{ whois.server }}
-              <span v-if="whois.server_info" class="muted">({{ whois.server_info }})</span>
-            </dd>
           </template>
           <template v-if="channelsList.length">
             <dt>Channels</dt>
@@ -96,25 +89,25 @@
             </dd>
           </template>
         </dl>
+        <div v-if="chips.length" class="chips">
+          <span v-for="c in chips" :key="c.label" :class="['chip', c.tone]">
+            <i v-if="c.icon" :class="c.icon"></i> {{ c.label }}
+          </span>
+        </div>
       </section>
 
-      <!-- Your note -->
-      <section class="section">
-        <h3>Your note</h3>
-        <div v-if="noteText" class="note">
-          <p class="note-body">{{ noteText }}</p>
+      <!-- Your note — headingless; a divider sets it off from the details above
+           (only when there are details to divide from). -->
+      <section class="section note-section" :class="{ divided: hasDetails }">
+        <div class="note">
+          <p v-if="noteText" class="note-body">{{ noteText }}</p>
           <p class="meta">
             <span v-if="noteUpdatedAt">Updated {{ formatDateTime(noteUpdatedAt) }}</span>
             <button type="button" class="link inline" @click="openNoteEditor">
-              <i class="fa-solid fa-pen"></i> Edit
+              <i :class="noteText ? 'fa-solid fa-pen' : 'fa-solid fa-plus'"></i>
+              {{ noteText ? 'Edit' : 'Add note' }}
             </button>
           </p>
-        </div>
-        <div v-else class="note empty">
-          <p class="muted">No note yet.</p>
-          <button type="button" class="link inline" @click="openNoteEditor">
-            <i class="fa-solid fa-plus"></i> Add note
-          </button>
         </div>
       </section>
 
@@ -122,44 +115,51 @@
            If we already know they're offline (MONITOR or not_found whois)
            the presence dot in the header carries that, so we skip the
            redundant line and let "Your note" stand on its own. -->
-      <section v-if="!hasIdentity && !hasActivity && !isOffline" class="section status">
+      <section v-if="!hasDetails && !isOffline" class="section status">
         <p class="muted">
           <i class="fa-solid fa-circle-notch fa-spin"></i> Waiting for whois reply…
         </p>
       </section>
     </div>
 
-    <footer class="footer">
-      <!-- Send DM and Ignore are meaningless while the peer is offline —
-           DMs would bounce and there's no hostmask to build an ignore rule
-           from. Hide entirely rather than disable so the modal doesn't read
-           as "you could do this if only…". -->
+    <footer class="modal-footer">
+      <!-- Send DM and Ignore are meaningless on yourself and while the peer is
+           offline — DMs would bounce and there's no hostmask to build an ignore
+           rule from. Hide entirely rather than disable (matching Add Friend) so
+           the modal doesn't read as "you could do this if only…". -->
       <button
-        v-if="!isOffline"
+        v-if="!isOffline && !isSelf"
         type="button"
         class="btn-secondary"
+        title="Send DM"
         @click="onSendDm"
-        :disabled="isSelf"
       >
-        <i class="fa-solid fa-envelope"></i> Send DM
+        <i class="fa-solid fa-envelope"></i> <span class="label">Send DM</span>
       </button>
       <button
-        v-if="!isOffline"
+        v-if="!isOffline && !isSelf"
         type="button"
         class="btn-secondary"
+        title="Ignore…"
         @click="onIgnore"
-        :disabled="isSelf"
       >
-        <i class="fa-solid fa-ban"></i> Ignore…
+        <i class="fa-solid fa-ban"></i> <span class="label">Ignore…</span>
       </button>
       <!-- Friending works regardless of presence — you can watch an offline
            peer — so this isn't gated on isOffline like Send DM / Ignore. -->
-      <button v-if="!isSelf" type="button" class="btn-secondary" @click="onAddFriend">
-        <i class="fa-solid fa-user-group"></i> {{ isFriend ? 'Edit Friend' : 'Add Friend' }}
+      <button
+        v-if="!isSelf"
+        type="button"
+        class="btn-secondary"
+        :title="isFriend ? 'Edit Friend' : 'Add Friend'"
+        @click="onAddFriend"
+      >
+        <i class="fa-solid fa-user-group"></i>
+        <span class="label">{{ isFriend ? 'Edit Friend' : 'Add Friend' }}</span>
       </button>
       <span class="spacer"></span>
       <button type="button" class="btn-secondary" @click="onRefresh" title="Re-run whois">
-        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+        <i class="fa-solid fa-arrows-rotate"></i> <span class="label">Refresh</span>
       </button>
     </footer>
 
@@ -312,14 +312,21 @@ const channelsList = computed(() => {
     });
 });
 
-const hasIdentity = computed(
-  () => !!(whois.value && (whois.value.real_name || hostmask.value || whois.value.account)),
-);
-const hasActivity = computed(
+// Any detail row present → render the table. Covers every row (identity +
+// activity, including actual host) so the headerless table shows whenever we
+// have anything at all to display.
+const hasDetails = computed(
   () =>
     !!(
       whois.value &&
-      (idleLabel.value || signonLabel.value || whois.value.server || channelsList.value.length)
+      (whois.value.real_name ||
+        hostmask.value ||
+        actualHost.value ||
+        whois.value.account ||
+        whois.value.server ||
+        idleLabel.value ||
+        signonLabel.value ||
+        channelsList.value.length)
     ),
 );
 
@@ -395,49 +402,47 @@ function copyHostmask() {
   flex: 1;
   min-height: 0;
   /* Break out of card padding so the scrollbar sits against the card
-     border; padding keeps section content visually aligned. */
+     border; padding keeps section content visually aligned. The bottom padding
+     gives the note area breathing room above the footer divider. */
   margin: 0 calc(-1 * var(--card-pad-x));
-  padding: 0 var(--card-pad-x) var(--space-4);
+  padding: 0 var(--card-pad-x) var(--space-7);
 }
 
-.presence {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  color: var(--fg);
-  font-weight: 600;
-}
-.presence .dot {
+/* Presence dot sits just left of the nick in the title. The class is applied to
+   the dot itself now (no wrapping .presence label), so colour keys off it. */
+.dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--fg-muted);
+  margin-right: var(--space-3);
+  vertical-align: middle;
 }
-.presence.online .dot {
+.dot.online {
   background: var(--good);
 }
-.presence.away .dot {
+.dot.away {
   background: var(--warn);
 }
-.presence.offline .dot {
+.dot.offline {
   background: var(--bad);
 }
-.presence.unknown .dot {
+.dot.unknown {
   background: var(--fg-muted);
 }
-.away-msg {
-  margin-left: var(--space-4);
-  color: var(--fg-muted);
-  font-weight: 400;
+/* Away message beside the nick, matching the input-bar prompt: warn-coloured and
+   exempt from the title's lowercase transform so the message reads verbatim. */
+.away {
+  color: var(--warn);
+  text-transform: none;
 }
 
-.section h3 {
-  margin: 0 0 var(--space-4);
-  color: var(--accent);
-  font-weight: 700;
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
+/* Divider above the note section, mirroring the head's rule on the opposite
+   edge. Only applied when there's a details section above it to separate from. */
+.note-section.divided {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-7);
 }
 
 dl {
@@ -516,17 +521,17 @@ code {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.note.empty {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-}
 .meta {
-  margin: var(--space-4) 0 0;
+  margin: 0;
   color: var(--fg-muted);
   display: flex;
   gap: var(--space-6);
   align-items: baseline;
+}
+/* Only space the meta line off the note body when a note is present; with no
+   note the Add-note button sits on its own with no superfluous top gap. */
+.note-body + .meta {
+  margin-top: var(--space-4);
 }
 
 .link.inline {
@@ -543,34 +548,5 @@ code {
 
 .status {
   padding: var(--space-6) 0;
-}
-
-.footer {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding-top: var(--space-7);
-  border-top: 1px solid var(--border);
-}
-.footer .spacer {
-  flex: 1;
-}
-.btn-secondary {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: var(--space-3) var(--space-6);
-  cursor: pointer;
-  font: inherit;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-.btn-secondary:hover:not(:disabled) {
-  background: var(--bg-soft);
-}
-.btn-secondary:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 </style>

@@ -5,30 +5,32 @@
 
 <template>
   <AppModal word="ignore" :title="`ignore ${nick}`" size="md" @close="$emit('close')">
-    <form class="body" @submit.prevent="confirm">
-      <label class="field">
-        <span class="label-text">Mask</span>
-        <input
-          ref="inputEl"
-          v-model="mask"
-          type="text"
-          spellcheck="false"
-          autocapitalize="off"
-          autocomplete="off"
-        />
-      </label>
-      <p class="hint">
-        Plain nick (e.g. <code>{{ nick }}</code
-        >) or <code>nick!user@host</code> with <code>*</code> wildcards. The default targets this
-        user's identity (<code>user@host</code>) so it survives nick changes.
-      </p>
-      <p class="preview">
-        Messages matching <code>{{ mask || '∅' }}</code> will be hidden on this network.
-      </p>
-      <div class="actions">
+    <form class="modal-form" @submit.prevent="confirm">
+      <div class="body">
+        <label class="field">
+          <span class="label-text">Mask</span>
+          <input
+            ref="inputEl"
+            v-model="mask"
+            type="text"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+          />
+        </label>
+        <p class="hint">
+          Plain nick (e.g. <code>{{ nick }}</code
+          >) or <code>nick!user@host</code> with <code>*</code> wildcards. The default targets this
+          user's identity (<code>user@host</code>) so it survives nick changes.
+        </p>
+        <p class="preview">
+          Messages matching <code>{{ mask || '∅' }}</code> will be hidden on this network.
+        </p>
+      </div>
+      <footer class="modal-footer">
         <button type="button" class="btn-secondary" @click="$emit('close')">Cancel</button>
         <button type="submit" class="btn-primary" :disabled="!mask.trim()">Ignore</button>
-      </div>
+      </footer>
     </form>
   </AppModal>
 </template>
@@ -79,6 +81,12 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Breathing room so the last content doesn't butt against the footer divider
+     when scrolled to the bottom. */
+  padding-bottom: var(--space-7);
 }
 .field {
   display: flex;
@@ -113,34 +121,5 @@ code {
   background: var(--bg-soft);
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
-}
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
-}
-.btn-primary,
-.btn-secondary {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: var(--space-3) var(--space-6);
-  cursor: pointer;
-  font: inherit;
-}
-.btn-primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn-primary:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.btn-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-}
-.btn-secondary:hover {
-  background: var(--bg-soft);
 }
 </style>

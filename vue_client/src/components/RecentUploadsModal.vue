@@ -4,7 +4,7 @@
 -->
 
 <template>
-  <AppModal word="uploads" title="recent uploads" size="xl" @close="$emit('close')">
+  <AppModal word="uploads" title="recent uploads" size="xl" fill-height @close="$emit('close')">
     <p v-if="uploads.listError" class="error">{{ uploads.listError }}</p>
 
     <div ref="listEl" class="list-wrap" @scroll="onScroll">
@@ -38,33 +38,19 @@
             <div class="filename" :title="u.filename || ''">{{ u.filename || '(pasted)' }}</div>
             <div v-if="u.removed" class="url removed-note">Removed by moderation</div>
             <div v-else class="url" :title="u.url">{{ u.url }}</div>
-            <div class="sub">
-              <span v-if="u.provider">{{ u.provider }}</span>
-              <span v-if="u.created_at">· {{ formatRelative(u.created_at) }}</span>
-              <span v-if="u.byte_size">· {{ formatBytes(u.byte_size) }}</span>
-              <span v-if="u.width && u.height">· {{ u.width }}×{{ u.height }}</span>
-            </div>
+            <div class="sub">{{ metaLine(u) }}</div>
           </div>
           <div class="row-actions">
-            <!-- A removed upload's URL is dead — only allow clearing it from history. -->
-            <template v-if="!u.removed">
-              <button class="link" @click="onInsert(u)" title="insert URL into input">
-                insert
-              </button>
-              <button
-                class="link"
-                @click="onCopy(u)"
-                :title="copiedId === u.id ? 'copied' : 'copy URL'"
-              >
-                {{ copiedId === u.id ? 'copied' : 'copy' }}
-              </button>
-            </template>
+            <!-- A removed upload's URL is dead, so there's nothing to copy. -->
             <button
-              class="link danger"
-              @click="onDelete(u)"
-              title="remove from history (does not delete from host)"
+              v-if="!u.removed"
+              class="link copy"
+              :class="{ copied: copiedId === u.id }"
+              @click="onCopy(u)"
+              :title="copiedId === u.id ? 'copied' : 'copy URL'"
+              :aria-label="copiedId === u.id ? 'copied' : 'copy URL'"
             >
-              delete
+              <i :class="copiedId === u.id ? 'fa-solid fa-check' : 'fa-regular fa-copy'"></i>
             </button>
           </div>
         </li>
@@ -94,7 +80,7 @@ interface UploadRow extends UploadItem {
   height?: number;
 }
 
-const emit = defineEmits<{
+defineEmits<{
   close: [];
 }>();
 const uploads = useUploadsStore();
@@ -118,11 +104,6 @@ function onScroll() {
   }
 }
 
-function onInsert(u: UploadRow) {
-  uploads.requestInsert(u.url);
-  emit('close');
-}
-
 async function onCopy(u: UploadRow) {
   try {
     await navigator.clipboard.writeText(u.url);
@@ -136,18 +117,23 @@ async function onCopy(u: UploadRow) {
   }
 }
 
-async function onDelete(u: UploadRow) {
-  try {
-    await uploads.remove(u.id);
-  } catch (_) {
-    /* listError set */
-  }
-}
-
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Build the metadata sub-line in JS so the " · " separators keep their spaces —
+// Vue's whitespace condensing strips the gaps between adjacent inline spans.
+function metaLine(u: UploadRow): string {
+  return [
+    u.provider,
+    u.created_at && formatRelative(u.created_at),
+    u.byte_size && formatBytes(u.byte_size),
+    u.width && u.height && `${u.width}×${u.height}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 </script>
 
@@ -162,9 +148,6 @@ function formatBytes(n: number) {
 }
 .link:hover {
   color: var(--accent);
-}
-.link.danger:hover {
-  color: var(--bad);
 }
 
 .error {
@@ -196,8 +179,11 @@ function formatBytes(n: number) {
   column-gap: var(--space-2);
   row-gap: var(--space-4);
   align-items: center;
-  padding: var(--space-4) 0;
+  /* Roomy padding-bottom above the separator plus a margin below it to space the
+     rows well apart, matching HistoryMessageRow. */
+  padding: var(--space-4) 0 var(--space-8);
   border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-4);
 }
 .thumb-link {
   display: block;
@@ -247,23 +233,18 @@ function formatBytes(n: number) {
   align-items: center;
   margin-left: var(--space-6);
 }
-
-/* Phone widths: stack the actions under the thumb+meta block instead of
-   trying to fit a third column. Bumps the tap target padding so the
-   tiny text links aren't a coin-toss to hit with a thumb. */
-@media (max-width: 768px) {
-  .row {
-    grid-template-columns: 80px 1fr;
-    row-gap: var(--space-4);
-  }
-  .row-actions {
-    grid-column: 1 / -1;
-    justify-content: flex-end;
-    margin-left: 0;
-  }
-  .row-actions .link {
-    padding: var(--space-3) var(--space-5);
-  }
+/* Copy is the lone row action now, so it stays in its own column on every
+   width — a single icon needs no separate mobile bar. Padding gives it a
+   comfortable tap target. */
+.copy {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--icon-md);
+}
+.copy.copied {
+  color: var(--good);
+}
+.copy.copied:hover {
+  color: var(--good);
 }
 
 .empty {

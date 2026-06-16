@@ -4,7 +4,7 @@
 -->
 
 <template>
-  <AppModal word="highlights" title="highlights" size="lg" align="top" @close="$emit('close')">
+  <AppModal word="highlights" title="highlights" size="lg" fill-height @close="$emit('close')">
     <template #actions>
       <button
         class="link sound-toggle"

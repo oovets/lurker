@@ -44,7 +44,6 @@ export const useSearchStore = defineStore('search', {
     // of "search → reference → close → reopen → next result" reads feels
     // continuous. Reset by runSearch() — a brand-new query starts fresh.
     scrollTop: 0,
-    selectedIndex: 0,
   }),
   actions: {
     setQuery(raw: string) {
@@ -89,7 +88,6 @@ export const useSearchStore = defineStore('search', {
       this.nextBefore = null;
       this.error = '';
       this.scrollTop = 0;
-      this.selectedIndex = 0;
       const payload = this.buildPayload(null);
       if (!payload) {
         this.loading = false;
@@ -139,7 +137,6 @@ export const useSearchStore = defineStore('search', {
       this.error = '';
       this.searched = false;
       this.scrollTop = 0;
-      this.selectedIndex = 0;
     },
   },
 });

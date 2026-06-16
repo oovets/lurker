@@ -5,8 +5,9 @@
 
 <template>
   <div class="invite">
+    <WordBackdrop word="welcome" />
     <div class="card">
-      <h1>Lurker</h1>
+      <h1>lurker</h1>
 
       <template v-if="checking">
         <p class="subtitle">Checking invite…</p>
@@ -46,7 +47,7 @@
             />
           </label>
           <p class="hint">8+ characters. You can add a passkey later in settings.</p>
-          <button type="submit" :disabled="working || !canSubmit">
+          <button type="submit" class="btn-primary" :disabled="working || !canSubmit">
             {{ submitLabel }}
           </button>
         </form>
@@ -60,6 +61,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth.js';
+import WordBackdrop from '../components/WordBackdrop.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -115,23 +117,37 @@ async function onAccept() {
 
 <style scoped>
 .invite {
+  position: relative;
   min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 .card {
-  border: 1px solid var(--accent);
-  padding: var(--space-8) var(--space-9);
-  width: 360px;
+  position: relative;
+  z-index: var(--z-base);
+  width: min(380px, 92vw);
+  background: var(--bg);
+  /* Floating-surface chrome shared with the modals (AppModal .card): a subtle
+     --border (not the old loud accent frame), a hair of radius, and the shared
+     drop shadow — the card floats on the WordBackdrop. */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+  padding: var(--space-9);
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
 }
 h1 {
-  margin: 0;
+  margin: 0 0 var(--space-2);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
+  text-transform: lowercase;
+  font-size: clamp(2.5rem, 5vw, 3.5rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 .subtitle {
   margin: 0;
@@ -164,10 +180,6 @@ label {
 label span {
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-button {
-  cursor: pointer;
-  padding: var(--space-4) var(--space-6);
 }
 .error {
   margin: 0;

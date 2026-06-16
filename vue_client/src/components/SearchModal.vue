@@ -4,7 +4,7 @@
 -->
 
 <template>
-  <AppModal word="search" title="search" size="lg" align="top" @close="$emit('close')">
+  <AppModal word="search" title="search" size="lg" fill-height @close="$emit('close')">
     <div class="search-row">
       <input
         ref="inputEl"
@@ -14,18 +14,15 @@
         placeholder="search messages — from:nick in:#channel on:network"
         autocomplete="off"
         spellcheck="false"
-        @keydown="onKeydown"
       />
     </div>
     <p v-if="store.error" class="error inline">{{ store.error }}</p>
     <ul v-if="visibleResults.length" ref="listEl" class="match-list" @scroll="onScroll">
       <HistoryMessageRow
-        v-for="(m, i) in visibleResults"
+        v-for="m in visibleResults"
         :key="`${m.networkId}::${m.target}::${m.id}`"
         :message="m"
-        :active="i === selected"
         @jump="onJump"
-        @hover="selected = i"
       />
       <li v-if="store.loading" class="more">Loading…</li>
     </ul>
@@ -71,10 +68,6 @@ const visibleResults = computed(() =>
 
 const inputEl = ref<HTMLInputElement | null>(null);
 const listEl = ref<HTMLUListElement | null>(null);
-// Hydrated from the store on mount so a closed-then-reopened modal lands
-// on the same row the user was last on. Mirrored back into the store on
-// unmount.
-const selected = ref(store.selectedIndex);
 
 // Local mirror of the store's raw query so we can debounce dispatch without
 // debouncing the text field itself. Scoped opens seed the prefilled filter.
@@ -88,54 +81,10 @@ watch(queryInput, (val) => {
   }, 200);
 });
 
-// Reset the keyboard cursor whenever the visible result set is replaced
-// (a fresh search), but leave it alone on pagination appends. Clamp to
-// in-range when the set shrinks (e.g. a result becomes ignored) so the
-// restored selectedIndex never points past the end.
-watch(
-  () => visibleResults.value.length,
-  (len, prev) => {
-    if (len === 0) {
-      selected.value = 0;
-      return;
-    }
-    if (len < prev || prev === 0) selected.value = 0;
-    if (selected.value >= len) selected.value = len - 1;
-  },
-);
-
 function onJump(m: HistoryMessage | SearchResult) {
   const id = typeof m.id === 'number' ? m.id : 0;
   emit('jump', { networkId: m.networkId, target: m.target, messageId: id });
   emit('close');
-}
-
-function scrollSelectedIntoView() {
-  nextTick(() => {
-    const el = listEl.value;
-    if (!el) return;
-    el.children[selected.value]?.scrollIntoView({ block: 'nearest' });
-  });
-}
-
-function onKeydown(e: KeyboardEvent) {
-  const rows = visibleResults.value;
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    if (!rows.length) return;
-    selected.value = (selected.value + 1) % rows.length;
-    scrollSelectedIntoView();
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    if (!rows.length) return;
-    selected.value = (selected.value - 1 + rows.length) % rows.length;
-    scrollSelectedIntoView();
-  } else if (e.key === 'Enter') {
-    e.preventDefault();
-    const row = rows[selected.value];
-    if (row) onJump(row);
-  }
-  // Esc handled by AppModal's keydown listener on the modal root.
 }
 
 function onScroll() {
@@ -161,7 +110,6 @@ onMounted(() => {
       error: '',
       searched: false,
       scrollTop: 0,
-      selectedIndex: 0,
     });
   }
   setTimeout(() => {
@@ -175,8 +123,7 @@ onMounted(() => {
       inputEl.value?.select();
     }
   }, 0);
-  // Restore the scroll position after the list has rendered. The cursor was
-  // already seeded from the store via the `selected` ref's initial value.
+  // Restore the scroll position after the list has rendered.
   nextTick(() => {
     const el = listEl.value;
     if (el && store.scrollTop > 0) el.scrollTop = store.scrollTop;
@@ -195,7 +142,6 @@ onBeforeUnmount(() => {
   // The Pinia store already keeps query, results, hasMore, nextBefore, and
   // searched across opens; this rounds out the user-perceived "where I was".
   store.scrollTop = listEl.value?.scrollTop || 0;
-  store.selectedIndex = selected.value;
 });
 </script>
 

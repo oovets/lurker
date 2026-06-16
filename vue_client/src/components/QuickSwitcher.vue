@@ -195,8 +195,14 @@ onMounted(() => {
   z-index: var(--z-modal);
 }
 .card {
+  /* "A big context menu" — same floating-surface chrome as ContextMenu and the
+     dialog cards (subtle --border, hair of radius, shared shadow), over the
+     --scrim backdrop above (no WordBackdrop: a fast switcher should keep the
+     app visible behind it). */
   background: var(--bg);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
   width: min(560px, 92vw);
   max-height: 70vh;
   display: flex;

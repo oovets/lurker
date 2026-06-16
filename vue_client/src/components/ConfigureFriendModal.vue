@@ -5,60 +5,68 @@
 
 <template>
   <AppModal word="friend" :title="title" size="md" @close="onClose">
-    <form class="body" @submit.prevent="confirm">
-      <label class="field">
-        <span class="label">Display name</span>
-        <input v-model="displayName" type="text" maxlength="128" placeholder="e.g. Darc" />
-      </label>
+    <form class="modal-form" @submit.prevent="confirm">
+      <div class="body">
+        <label class="field">
+          <span class="label">Display name</span>
+          <input v-model="displayName" type="text" maxlength="128" placeholder="e.g. Darc" />
+        </label>
 
-      <fieldset class="targets-field">
-        <legend>Watch nicks</legend>
-        <p v-if="!networks.networks.length" class="meta">Add a network first to watch a friend.</p>
-        <template v-else>
-          <div v-for="(row, i) in rows" :key="row.key" class="target-row">
-            <select v-model.number="row.networkId" class="net-select" aria-label="Network">
-              <option v-for="n in networks.networks" :key="n.id" :value="n.id">
-                {{ n.name }}
-              </option>
-            </select>
-            <input v-model="row.nick" type="text" class="nick-input" placeholder="nick" />
-            <label class="primary-toggle" title="Open this DM when the friend is clicked">
-              <input
-                type="radio"
-                name="primary-target"
-                :value="row.key"
-                v-model.number="primaryKey"
-              />
-              <span>primary</span>
-            </label>
-            <button
-              type="button"
-              class="row-remove"
-              title="Remove nick"
-              aria-label="Remove nick"
-              @click="removeRow(i)"
-            >
-              <i class="fa-solid fa-xmark"></i>
+        <!-- Plain div, not <fieldset>: a fieldset inside a flex column triggers a
+             Chrome initial-layout bug where its block size is mis-measured until a
+             reflow, leaving a phantom gap below the form. role+aria-label keep the
+             grouping semantics a fieldset/legend would have provided. -->
+        <div class="targets-field" role="group" aria-label="Watch nicks">
+          <div class="targets-legend" aria-hidden="true">Watch nicks</div>
+          <p v-if="!networks.networks.length" class="meta">
+            Add a network first to watch a friend.
+          </p>
+          <template v-else>
+            <div v-for="(row, i) in rows" :key="row.key" class="target-row">
+              <select v-model.number="row.networkId" class="net-select" aria-label="Network">
+                <option v-for="n in networks.networks" :key="n.id" :value="n.id">
+                  {{ n.name }}
+                </option>
+              </select>
+              <input v-model="row.nick" type="text" class="nick-input" placeholder="nick" />
+              <label class="primary-toggle" title="Open this DM when the friend is clicked">
+                <input
+                  type="radio"
+                  name="primary-target"
+                  :value="row.key"
+                  v-model.number="primaryKey"
+                />
+                <span>primary</span>
+              </label>
+              <button
+                type="button"
+                class="row-remove"
+                title="Remove nick"
+                aria-label="Remove nick"
+                @click="removeRow(i)"
+              >
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            <button type="button" class="add-row" @click="addRow">
+              <i class="fa-solid fa-plus"></i> Add nick
             </button>
-          </div>
-          <button type="button" class="add-row" @click="addRow">
-            <i class="fa-solid fa-plus"></i> Add nick
-          </button>
-          <p class="meta">The primary nick is the DM that opens when you click the friend.</p>
-        </template>
-      </fieldset>
+            <p class="meta">The primary nick is the DM that opens when you click the friend.</p>
+          </template>
+        </div>
 
-      <label class="notify">
-        <input v-model="notifyOnline" type="checkbox" />
-        <span>Notify me when they come online</span>
-      </label>
+        <label class="notify">
+          <input v-model="notifyOnline" type="checkbox" />
+          <span>Notify me when they come online</span>
+        </label>
 
-      <p class="meta">
-        Due to differences in network support for MONITOR and AWAY, presence tracking may be
-        unreliable. Away state tracking depends on sharing a channel with your friend.
-      </p>
+        <p class="meta">
+          Due to differences in network support for MONITOR and AWAY, presence tracking may be
+          unreliable.
+        </p>
+      </div>
 
-      <div class="actions">
+      <footer class="modal-footer">
         <button
           v-if="isEditing"
           type="button"
@@ -69,7 +77,7 @@
         </button>
         <button type="button" class="btn-secondary" @click="onClose">Cancel</button>
         <button type="submit" class="btn-primary" :disabled="!canSave">Save</button>
-      </div>
+      </footer>
     </form>
   </AppModal>
 </template>
@@ -178,12 +186,15 @@ function onClose() {
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
-  /* A friend can have many watch nicks; on the full-height mobile sheet (and a
-     short desktop window) let the form scroll inside the card instead of
-     overflowing it and pushing Save out of reach. */
+  /* A friend can have many watch nicks; let the body scroll inside the card so a
+     long list of targets never pushes the content past the modal — the footer
+     actions stay pinned below regardless (see .modal-form / .modal-footer). */
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Breathing room so the last content doesn't butt against the footer divider
+     when scrolled to the bottom. */
+  padding-bottom: var(--space-7);
 }
 .field {
   display: flex;
@@ -213,9 +224,8 @@ input[type='text']:disabled {
   flex-direction: column;
   gap: var(--space-4);
 }
-.targets-field legend {
+.targets-legend {
   color: var(--fg-muted);
-  padding: 0 var(--space-2);
 }
 .target-row {
   display: flex;
@@ -275,47 +285,10 @@ input[type='text']:disabled {
   margin: 0;
   color: var(--fg-muted);
 }
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
-}
 /* Push Remove to the far left, away from Cancel/Save, so the destructive action
    isn't adjacent to the positive ones. */
-.actions .remove {
+.modal-footer .remove {
   margin-right: auto;
-}
-.btn-primary,
-.btn-secondary {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: var(--space-3) var(--space-6);
-  cursor: pointer;
-  font: inherit;
-}
-.btn-primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn-primary:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.btn-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-}
-.btn-secondary:hover {
-  background: var(--bg-soft);
-}
-.btn-secondary.danger {
-  color: var(--bad);
-  border-color: var(--bad);
-}
-.btn-secondary.danger:hover {
-  background: color-mix(in srgb, var(--bad) 15%, transparent);
 }
 
 /* The four target controls don't fit one line on a phone (the network select's

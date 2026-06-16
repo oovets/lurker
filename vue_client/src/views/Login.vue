@@ -40,7 +40,7 @@
             />
           </label>
           <p class="hint">8+ characters. You can add a passkey later in settings.</p>
-          <button type="submit" :disabled="working">
+          <button type="submit" class="btn-primary" :disabled="working">
             {{ submitLabel }}
           </button>
         </form>
@@ -49,24 +49,11 @@
       <!-- Normal login -->
       <template v-else>
         <p class="subtitle">Sign in to your IRC client.</p>
-        <button v-if="authMethods.passkey" class="primary" :disabled="working" @click="onLogin">
+        <button v-if="authMethods.passkey" class="btn-primary" :disabled="working" @click="onLogin">
           {{ working && loginMode === 'passkey' ? 'Waiting for passkey…' : 'Sign in with passkey' }}
         </button>
 
-        <button
-          v-if="authMethods.passkey && !showPasswordForm"
-          type="button"
-          class="link toggle-link"
-          @click="showPasswordForm = true"
-        >
-          or sign in with password
-        </button>
-
-        <form
-          v-if="showPasswordForm || !authMethods.passkey"
-          @submit.prevent="onPasswordLogin"
-          class="password-form"
-        >
+        <form @submit.prevent="onPasswordLogin" class="password-form">
           <label>
             <span>Username</span>
             <input v-model="username" autocomplete="username" required />
@@ -75,7 +62,7 @@
             <span>Password</span>
             <input v-model="password" type="password" autocomplete="current-password" required />
           </label>
-          <button type="submit" :disabled="working">
+          <button type="submit" class="btn-primary" :disabled="working">
             {{ working && loginMode === 'password' ? 'Signing in…' : 'Sign in with password' }}
           </button>
         </form>
@@ -106,7 +93,6 @@ const router = useRouter();
 const route = useRoute();
 const setup = ref<SetupStatus | null>(null);
 const authMethods = ref<AuthMethods>({ passkey: false });
-const showPasswordForm = ref(false);
 const loginMode = ref<'passkey' | 'password' | null>(null);
 
 const submitLabel = computed(() => (working.value ? 'Creating account…' : 'Create account'));
@@ -119,7 +105,6 @@ onMounted(async () => {
   setup.value = await auth.fetchSetupStatus();
   if (!setup.value?.needsSetup) {
     authMethods.value = await auth.fetchAuthMethods();
-    if (!authMethods.value.passkey) showPasswordForm.value = true;
   }
   loadingStatus.value = false;
 });
@@ -191,10 +176,15 @@ async function onCreateUser() {
 .card {
   position: relative;
   z-index: var(--z-base);
+  width: min(380px, 92vw);
   background: var(--bg);
-  border: 1px solid var(--accent);
+  /* Floating-surface chrome shared with the modals (AppModal .card): a subtle
+     --border (not the old loud accent frame), a hair of radius, and the shared
+     drop shadow — the card floats on the WordBackdrop. */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
   padding: var(--space-9);
-  width: 360px;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
@@ -235,26 +225,9 @@ label span {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-button {
-  cursor: pointer;
-}
-button.primary {
-  padding: var(--space-4) var(--space-6);
-}
 .error {
   margin: 0;
   color: var(--bad);
-}
-.toggle-link {
-  background: none;
-  border: none;
-  color: var(--accent);
-  padding: 0;
-  text-align: left;
-  cursor: pointer;
-}
-.toggle-link:hover {
-  color: var(--fg);
 }
 .password-form {
   margin-top: var(--space-2);

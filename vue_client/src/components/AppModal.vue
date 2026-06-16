@@ -18,7 +18,6 @@
 <template>
   <div
     class="modal"
-    :class="[`align-${align}`]"
     tabindex="-1"
     ref="modalEl"
     @click.self="onBackdropClick"
@@ -67,7 +66,6 @@ const props = withDefaults(
     word?: string;
     title?: string;
     size?: string;
-    align?: string;
     closeOnBackdrop?: boolean;
     closeTitle?: string;
     // Pin the card to full height on desktop (mobile is already a full sheet),
@@ -78,7 +76,6 @@ const props = withDefaults(
     word: '',
     title: '',
     size: 'lg',
-    align: 'center',
     closeOnBackdrop: true,
     closeTitle: 'close',
     fillHeight: false,
@@ -117,45 +114,15 @@ onMounted(() => {
   background: var(--bg);
   display: flex;
   justify-content: center;
+  /* Every modal centers vertically — one positioning rule, no center/top split.
+     Scrollable "browser" modals stay put while filtering by locking their
+     height (.fill-height) rather than top-anchoring, so a filtering list never
+     shifts the header and an empty list reads as a stable centered card instead
+     of being stranded at the top. */
+  align-items: center;
   z-index: var(--z-modal);
   overflow: hidden;
   outline: none;
-}
-.modal.align-center {
-  align-items: center;
-}
-.modal.align-top {
-  align-items: flex-start;
-  padding-top: 2dvh;
-}
-/* Match the 2dvh top so a fully-tall card has equal breathing room
-   above and below. Default .card max-height: 85dvh would otherwise
-   leave a ~13dvh gap at the bottom. dvh (dynamic viewport height)
-   tracks the visible area as the iPad URL bar collapses; plain vh
-   would lock to the layout viewport and overflow. */
-.modal.align-top .card {
-  max-height: 96dvh;
-}
-
-/* On mobile every modal becomes a full-screen sheet — the card fills the
-   viewport so the title is glued to the top and the body extends to the
-   bottom. Vertical centering reads as "off-center" when the card already
-   takes ~92vw of horizontal space. */
-@media (max-width: 768px) {
-  .modal,
-  .modal.align-top {
-    align-items: stretch;
-    padding: var(--space-7);
-  }
-  .card,
-  .card.size-sm,
-  .card.size-md,
-  .card.size-lg,
-  .card.size-xl {
-    width: 100%;
-    max-height: none;
-    height: 100%;
-  }
 }
 
 .card {
@@ -166,7 +133,14 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border: 1px solid var(--accent);
+  /* Same floating-surface chrome as the context menu / action bar / Cmd-K:
+     a subtle --border (not the old loud --accent), a hair of radius, and the
+     shared drop shadow — so a dialog reads as the same family of surface, just
+     larger. The card floats on the tiled WordBackdrop rather than being welded
+     to it by an accent frame. */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
   /* Card horizontal padding lives in a custom property so scrolling
      children can break out with margin: 0 calc(-1 * var(--card-pad-x))
      and have their scrollbar sit against the card border. */
@@ -187,24 +161,47 @@ onMounted(() => {
   width: min(900px, 92vw);
 }
 
+/* On mobile every modal is a full-frame sheet. Placed AFTER the .card.size-*
+   widths on purpose: the overrides share their specificity, so they have to
+   come later in source order to win — otherwise the size-specific 92vw widths
+   leave a left/right margin. The card fills the viewport edge-to-edge. */
+@media (max-width: 768px) {
+  .modal {
+    align-items: stretch;
+    /* Full-frame — no wallpaper sliver, and the card drops its border/radius
+       below (see the .card overrides). */
+    padding: 0;
+  }
+  .card,
+  .card.size-sm,
+  .card.size-md,
+  .card.size-lg,
+  .card.size-xl {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+  }
+}
+
 /* Pin to full height on desktop so content changes (e.g. a filtering list)
-   don't resize the modal. min-width so the mobile full-sheet rules above win. */
+   don't resize the modal. */
 @media (min-width: 769px) {
   .card.fill-height {
     height: 85dvh;
-  }
-  .modal.align-top .card.fill-height {
-    height: 96dvh;
   }
 }
 
 .head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-6);
-  padding: 0 0 var(--space-7);
-  margin-bottom: var(--space-7);
+  /* Compact header bar. Tightened now that the title is base-size — it used to
+     hold the clamp() giant title, which needed the extra room above the rule. */
+  padding: 0 0 var(--space-5);
+  margin-bottom: var(--space-6);
   border-bottom: 1px solid var(--border);
 }
 .title-wrap {
@@ -214,14 +211,15 @@ onMounted(() => {
 .title-wrap :slotted(h2),
 .title-wrap h2 {
   margin: 0;
+  /* No font-size override — the title inherits the user's base size like every
+     other piece of text (the one-font-size rule; this retires the last
+     clamp() exception). De-bolded too: accent color alone marks it as the
+     title. Hierarchy comes from the accent color + position (alone atop the
+     card, above the divider rule), not size or weight. */
   color: var(--accent);
-  font-weight: 700;
+  font-weight: var(--font-weight);
   text-transform: lowercase;
-  font-size: clamp(2rem, 4.5vw, 3rem);
-  /* Needs headroom for descenders (g/y/p) — line-height: 1 clips them
-     because the h2 itself has overflow: hidden for the ellipsis. */
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -13,116 +13,132 @@
   >
     <NetworkPicker v-if="step === 'pick'" @select="onPick" @manual="onManual" />
 
-    <form v-else class="net-form" @submit.prevent="submit">
-      <button v-if="!isEdit" type="button" class="back-link" @click="step = 'pick'">
-        ← {{ picked ? picked.name : 'pick a network' }}
-      </button>
-      <label>
-        <span>Name</span>
-        <input v-model="form.name" placeholder="Libera" required />
-      </label>
-      <div class="row">
-        <label class="grow">
-          <span>Host</span>
-          <input v-model="form.host" placeholder="irc.libera.chat" required />
-        </label>
-        <label class="port">
-          <span>Port</span>
-          <input v-model.number="form.port" type="number" min="1" max="65535" />
-        </label>
-        <label class="tls">
-          <span>TLS</span>
-          <input v-model="form.tls" type="checkbox" />
-        </label>
-      </div>
-      <label>
-        <span>Nick</span>
-        <input v-model="form.nick" required />
-      </label>
-      <label>
-        <span>Real name (optional)</span>
-        <input v-model="form.realname" />
-      </label>
-      <p v-if="showSaslHint" class="sasl-hint">
-        <strong>{{ picked?.name }}</strong> blocks unauthenticated connections from hosted servers,
-        so the SASL account and password below are <strong>not optional</strong> — register your
-        nick with the network first, then enter it here.
-      </p>
-      <div class="row">
-        <label class="grow">
-          <span>SASL account{{ saslRequired ? '' : ' (optional)' }}</span>
-          <input
-            v-model="form.sasl_account"
-            :placeholder="form.nick || 'defaults to nick'"
-            autocomplete="off"
-          />
-        </label>
-        <label class="grow">
-          <span>SASL password{{ saslRequired ? '' : ' (optional)' }}</span>
-          <input
-            v-model="form.sasl_password"
-            type="password"
-            autocomplete="off"
-            :placeholder="
-              isEdit && props.network?.has_sasl_password ? '(saved — type to replace)' : ''
-            "
-          />
-        </label>
-      </div>
-      <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
-        {{ showAdvanced ? '− Advanced options' : '+ Advanced options' }}
-      </button>
-      <div v-if="showAdvanced" class="advanced">
+    <form v-else class="modal-form" @submit.prevent="submit">
+      <div class="net-form">
+        <button v-if="!isEdit" type="button" class="back-link" @click="step = 'pick'">
+          ← {{ picked ? picked.name : 'pick a network' }}
+        </button>
         <label>
-          <span>Server password (optional)</span>
-          <input
-            v-model="form.server_password"
-            type="password"
-            autocomplete="off"
-            :placeholder="isEdit && props.network?.has_password ? '(saved — type to replace)' : ''"
-          />
+          <span>Name</span>
+          <input v-model="form.name" placeholder="Libera" required />
         </label>
-        <label v-if="!isEdit">
-          <span>Default channel</span>
-          <input v-model="form.default_channel" :placeholder="channelPlaceholder" />
+        <div class="row">
+          <label class="grow">
+            <span>Host</span>
+            <input v-model="form.host" placeholder="irc.libera.chat" required />
+          </label>
+          <label class="port">
+            <span>Port</span>
+            <input v-model.number="form.port" type="number" min="1" max="65535" />
+          </label>
+          <label class="tls">
+            <span>TLS</span>
+            <input v-model="form.tls" type="checkbox" />
+          </label>
+        </div>
+        <label>
+          <span>Nick</span>
+          <input v-model="form.nick" required />
         </label>
         <label>
-          <span>Commands to run on connect</span>
-          <textarea
-            v-model="form.connect_commands"
-            rows="4"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="AUTH <user> <password> etc…"
-          />
-          <small
-            >One per line, e.g. for opering up on connect. If you need to add a (eg, 15 sec) delay
-            between commands, you can write: WAIT 15</small
-          >
+          <span>Real name (optional)</span>
+          <input v-model="form.realname" />
         </label>
-        <label class="check">
-          <input v-model="form.autoconnect" type="checkbox" />
-          <span>Reconnect automatically</span>
-        </label>
-        <label class="check">
-          <input v-model="form.trusted_certificates" type="checkbox" />
-          <span>Only allow trusted certificates</span>
-        </label>
+        <p v-if="showSaslHint" class="sasl-hint">
+          <strong>{{ picked?.name }}</strong> blocks unauthenticated connections from hosted
+          servers, so the SASL account and password below are <strong>not optional</strong> —
+          register your nick with the network first, then enter it here.
+        </p>
+        <div class="row">
+          <label class="grow">
+            <span>SASL account{{ saslRequired ? '' : ' (optional)' }}</span>
+            <input
+              v-model="form.sasl_account"
+              :placeholder="form.nick || 'defaults to nick'"
+              autocomplete="off"
+            />
+          </label>
+          <label class="grow">
+            <span>SASL password{{ saslRequired ? '' : ' (optional)' }}</span>
+            <input
+              v-model="form.sasl_password"
+              type="password"
+              autocomplete="off"
+              :placeholder="
+                isEdit && props.network?.has_sasl_password ? '(saved — type to replace)' : ''
+              "
+            />
+          </label>
+        </div>
+        <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+          {{ showAdvanced ? '− Advanced options' : '+ Advanced options' }}
+        </button>
+        <div v-if="showAdvanced" class="advanced">
+          <label>
+            <span>Server password (optional)</span>
+            <input
+              v-model="form.server_password"
+              type="password"
+              autocomplete="off"
+              :placeholder="
+                isEdit && props.network?.has_password ? '(saved — type to replace)' : ''
+              "
+            />
+          </label>
+          <label v-if="!isEdit">
+            <span>Default channel</span>
+            <input v-model="form.default_channel" :placeholder="channelPlaceholder" />
+          </label>
+          <label>
+            <span>Commands to run on connect</span>
+            <textarea
+              v-model="form.connect_commands"
+              rows="4"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="AUTH <user> <password> etc…"
+            />
+            <small
+              >One per line, e.g. for opering up on connect. If you need to add a (eg, 15 sec) delay
+              between commands, you can write: WAIT 15</small
+            >
+          </label>
+          <label class="check">
+            <input v-model="form.autoconnect" type="checkbox" />
+            <span>Reconnect automatically</span>
+          </label>
+          <label class="check">
+            <input v-model="form.trusted_certificates" type="checkbox" />
+            <span>Only allow trusted certificates</span>
+          </label>
+        </div>
+        <p v-if="error" class="error">{{ error }}</p>
       </div>
-      <p v-if="error" class="error">{{ error }}</p>
-      <div class="actions">
-        <button v-if="isEdit" type="button" class="danger" :disabled="loading" @click="remove">
+      <footer class="modal-footer">
+        <button
+          v-if="isEdit"
+          type="button"
+          class="btn-secondary danger"
+          :disabled="loading"
+          @click="remove"
+        >
           Delete
         </button>
-        <button v-if="isEdit" type="button" class="ghost" :disabled="loading" @click="reconnect">
+        <button
+          v-if="isEdit"
+          type="button"
+          class="btn-secondary"
+          :disabled="loading"
+          @click="reconnect"
+        >
           Reconnect
         </button>
         <span class="spacer"></span>
-        <button type="button" class="ghost" @click="$emit('close')">Cancel</button>
-        <button type="submit" :disabled="loading">
+        <button type="button" class="btn-secondary" @click="$emit('close')">Cancel</button>
+        <button type="submit" class="btn-primary" :disabled="loading">
           {{ loading ? 'Saving…' : isEdit ? 'Save' : 'Save & connect' }}
         </button>
-      </div>
+      </footer>
     </form>
   </AppModal>
 </template>
@@ -304,9 +320,10 @@ async function remove(): Promise<void> {
   min-height: 0;
   overflow-y: auto;
   /* Match the breakout pattern from SearchModal/RecentUploadsModal so the
-     scrollbar sits against the card border instead of inside the padding. */
+     scrollbar sits against the card border instead of inside the padding.
+     Bottom padding keeps the last field off the footer divider when scrolled. */
   margin: 0 calc(-1 * var(--card-pad-x));
-  padding: 0 var(--card-pad-x);
+  padding: 0 var(--card-pad-x) var(--space-7);
 }
 label {
   display: flex;
@@ -401,27 +418,6 @@ label small {
   letter-spacing: normal;
   color: var(--fg);
   font-size: inherit;
-}
-.actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  margin-top: var(--space-3);
-}
-.spacer {
-  flex: 1;
-}
-.ghost {
-  border-color: var(--border);
-}
-.danger {
-  color: var(--bad);
-  border-color: var(--bad);
-}
-.danger:hover:not(:disabled) {
-  background: var(--bad);
-  color: var(--bg);
-  border-color: var(--bad);
 }
 .error {
   color: var(--bad);

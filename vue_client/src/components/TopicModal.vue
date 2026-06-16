@@ -13,10 +13,11 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import AppModal from './AppModal.vue';
 import LinkedText from './LinkedText.vue';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     topic?: string;
     label?: string;
@@ -28,17 +29,19 @@ defineEmits<{
   close: [];
 }>();
 
-// The label is the channel name and includes characters like '#' that
-// don't tile as nicely as a plain word, so just say "topic" on the wall.
-const word = 'topic';
+// Tile the channel name itself on the wall (WordBackdrop uppercases it), e.g.
+// "#LURKER". Falls back to "topic" if we somehow open without a channel label.
+const word = computed(() => props.label || 'topic');
 </script>
 
 <style scoped>
 .body {
   /* Break out of card padding so the scrollbar sits against the card
-     border; padding keeps content visually aligned with the rest. */
+     border; padding keeps content visually aligned with the rest. The head
+     already supplies the gap below the divider, so the top padding is just a
+     hair to keep the topic text from crowding it. */
   margin: 0 calc(-1 * var(--card-pad-x));
-  padding: var(--space-7) var(--card-pad-x) 0;
+  padding: var(--space-2) var(--card-pad-x) 0;
   overflow-y: auto;
   flex: 1;
   min-height: 0;

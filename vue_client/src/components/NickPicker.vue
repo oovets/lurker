@@ -217,10 +217,10 @@ watch(
   margin: 0 auto;
   max-height: 50vh;
   overflow-y: auto;
-  background: var(--bg-soft);
+  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover-up);
   z-index: var(--z-popover);
 }
 .row {
@@ -230,17 +230,14 @@ watch(
   padding: var(--space-6);
   min-height: 44px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border);
   user-select: none;
-}
-.row:last-child {
-  border-bottom: none;
 }
 /* Single highlight, shared by mouse and keyboard: hovering a row sets
    activeIndex (see @mouseenter), so .active alone covers both — no separate
-   :hover rule that could double-highlight during keyboard nav. */
+   :hover rule that could double-highlight during keyboard nav. Soft neutral
+   fill matches the context menu / Cmd-K list. */
 .row.active {
-  background: var(--bg);
+  background: var(--bg-soft);
 }
 .nick {
   font-weight: 500;

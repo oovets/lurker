@@ -4,7 +4,13 @@
 -->
 
 <template>
-  <AppModal word="channels" :title="`channels — ${networkLabel}`" size="xl" @close="$emit('close')">
+  <AppModal
+    word="channels"
+    :title="`channels — ${networkLabel}`"
+    size="xl"
+    fill-height
+    @close="$emit('close')"
+  >
     <div class="controls">
       <input
         ref="filterEl"
