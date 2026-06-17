@@ -141,6 +141,9 @@ function applyEvent(event: any): void {
       if (!buffers.pushMessage(event)) break;
       buffers.renameMember(event.networkId, event.target, event.nick, event.newNick);
       break;
+    case 'own-nick':
+      networks.applyOwnNick(event);
+      break;
     case 'topic':
       if (!buffers.pushMessage(event)) break;
       buffers.setTopic(event.networkId, event.target, event.text);

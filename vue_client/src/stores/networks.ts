@@ -169,6 +169,11 @@ export const useNetworksStore = defineStore('networks', {
         nick: event.nick || existing.nick,
       };
     },
+    applyOwnNick(event: any) {
+      const existing = this.states[event.networkId];
+      if (!existing || !event.nick) return;
+      this.states[event.networkId] = { ...existing, nick: event.nick };
+    },
     applyUserMode(event: any) {
       const existing = this.states[event.networkId] || { networkId: event.networkId, channels: [] };
       this.states[event.networkId] = {

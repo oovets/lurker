@@ -1111,6 +1111,7 @@ export class IrcConnection {
           this.regainNick = null;
           this.pendingRegainSetup = false;
         }
+        this.publish({ type: 'own-nick', nick: eventNewNick });
       }
       const userhost = buildUserhost(event);
       for (const ch of this.channels.values()) {
