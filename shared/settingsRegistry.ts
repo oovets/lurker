@@ -689,7 +689,7 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
   },
   {
     key: 'chat.show_event_host',
-    label: 'Show user@host on join/part/quit',
+    label: 'Show user@host on join/part/quit/nick',
     category: 'chat',
     group: 'consolidate',
     type: 'bool',

@@ -801,7 +801,7 @@ function prefixText(m: ChatMessage | undefined): string {
   }
 }
 
-// When the "Show user@host on join/part/quit" setting is on, return the
+// When the "Show user@host on join/part/quit/nick" setting is on, return the
 // affected user's ` (user@host)` suffix (leading space + parens, ready to drop
 // straight after the nick) for a presence event line — join, part, quit, nick
 // (#322). Returns '' when the setting is off, the userhost is missing
