@@ -8,7 +8,6 @@ import {
   IrcConnection,
   canonicalChannelTarget,
   computeFallbackNick,
-  formatWhoisRaw,
   formatSocketCloseErrorMessage,
   formatServerNumeric,
   formatUnknownNumeric,
@@ -128,6 +127,69 @@ describe('formatServerNumeric', () => {
     );
     expect(fmt(':srv 903 nick :SASL authentication successful')).toBe(
       'SASL authentication successful',
+    );
+  });
+
+  it('renders RPL_LINKS (364) as "server access_via hops info" per line (#312)', () => {
+    expect(fmt(':irc.tzirc.com 364 nick rock.tzirc.com irc.tzirc.com :1 #tZ IRC Network')).toBe(
+      'rock.tzirc.com irc.tzirc.com 1 #tZ IRC Network',
+    );
+    // The hub server reports itself with hop count 0.
+    expect(fmt(':irc.tzirc.com 364 nick irc.tzirc.com irc.tzirc.com/ :0 #tZ IRC Network')).toBe(
+      'irc.tzirc.com irc.tzirc.com/ 0 #tZ IRC Network',
+    );
+  });
+
+  it('renders RPL_ENDOFLINKS (365) terminator, dropping the mask param (#312)', () => {
+    expect(fmt(':irc.tzirc.com 365 nick * :End of /LINKS list.')).toBe('End of /LINKS list.');
+    // A bare 365 with no mask must not echo the nick back.
+    expect(fmt(':irc.tzirc.com 365 nick')).toBeNull();
+  });
+
+  it('renders RPL_INFO (371) and RPL_ENDOFINFO (374) trailing text (#312)', () => {
+    expect(fmt(':srv 371 nick :solanum-1.0-dev(20240101)')).toBe('solanum-1.0-dev(20240101)');
+    expect(fmt(':srv 374 nick :End of /INFO list.')).toBe('End of /INFO list.');
+    // A bare terminator must not echo the nick back.
+    expect(fmt(':srv 374 nick')).toBeNull();
+  });
+
+  it('renders RPL_HELP* (704/705/706) trailing text, ignoring the subject param (#312)', () => {
+    expect(fmt(':srv 704 nick index :Help topics available to users:')).toBe(
+      'Help topics available to users:',
+    );
+    expect(fmt(':srv 705 nick index :ACCEPT    ADMIN    AWAY')).toBe('ACCEPT    ADMIN    AWAY');
+    expect(fmt(':srv 706 nick index :End of /HELP.')).toBe('End of /HELP.');
+  });
+
+  it('renders WHOIS numerics as raw server lines, stripping the routing nick (#281)', () => {
+    // The leading "you" (the requester nick / numeric routing target) is
+    // dropped; everything the server sent after it is preserved verbatim.
+    expect(fmt(':srv 311 you alice ~alice user/alice * :Alice Example')).toBe(
+      'alice ~alice user/alice * Alice Example',
+    );
+    expect(fmt(':srv 319 you alice :#libera #lurker +#ops')).toBe('alice #libera #lurker +#ops');
+    expect(fmt(':srv 312 you alice tungsten.libera.chat :Helsinki, FI')).toBe(
+      'alice tungsten.libera.chat Helsinki, FI',
+    );
+    expect(fmt(':srv 671 you alice :is using a secure connection [TLSv1.3]')).toBe(
+      'alice is using a secure connection [TLSv1.3]',
+    );
+    expect(fmt(':srv 330 you alice aliceacct :is logged in as')).toBe(
+      'alice aliceacct is logged in as',
+    );
+    expect(fmt(':srv 317 you alice 234 1718500000 :seconds idle, signon time')).toBe(
+      'alice 234 1718500000 seconds idle, signon time',
+    );
+    expect(fmt(':srv 318 you alice :End of /WHOIS list.')).toBe('alice End of /WHOIS list.');
+  });
+
+  it('renders WHOWAS numerics raw too, so /whowas reuses the same path (#281)', () => {
+    expect(fmt(':srv 314 you Ghost ~ghost old.example.net * :A Spooky User')).toBe(
+      'Ghost ~ghost old.example.net * A Spooky User',
+    );
+    expect(fmt(':srv 369 you Ghost :End of WHOWAS')).toBe('Ghost End of WHOWAS');
+    expect(fmt(':srv 406 you Nobody :There was no such nickname')).toBe(
+      'Nobody There was no such nickname',
     );
   });
 
@@ -281,26 +343,6 @@ describe('tls certificate trust setting', () => {
     expect(untrustedConnect).toHaveBeenCalledWith(
       expect.objectContaining({ tls: true, rejectUnauthorized: false }),
     );
-  });
-});
-
-describe('formatWhoisRaw', () => {
-  it('formats the raw whois payload as a single server-buffer line', () => {
-    expect(
-      formatWhoisRaw({
-        nick: 'alice',
-        ident: 'a',
-        hostname: 'host.example',
-        channels: '#a #b',
-      }),
-    ).toBe(
-      'WHOIS alice: {"nick":"alice","ident":"a","hostname":"host.example","channels":"#a #b"}',
-    );
-  });
-
-  it('returns null for missing nick', () => {
-    expect(formatWhoisRaw({ ident: 'a' })).toBeNull();
-    expect(formatWhoisRaw(null)).toBeNull();
   });
 });
 

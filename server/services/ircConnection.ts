@@ -1375,16 +1375,17 @@ export class IrcConnection {
     // irc-framework aggregates RPL_WHOIS* (311/312/317/319/330/...) into a
     // single 'whois' event when RPL_ENDOFWHOIS arrives. We fan it out as a
     // structured `whois_result` event so the client can render it in the
-    // user-profile modal (issue #92), and we also mirror the raw payload into
-    // the server buffer for debugging/thoroughness (#281). `error: 'not_found'`
-    // surfaces here too (irc-framework synthesizes a whois event with that
-    // shape on ERR_NOSUCHNICK) so the modal can flip to its empty state.
+    // user-profile modal (issue #92). `error: 'not_found'` surfaces here too
+    // (irc-framework synthesizes a whois event with that shape on
+    // ERR_NOSUCHNICK) so the modal can flip to its empty state.
+    //
+    // The server buffer gets the *raw* whois lines instead — rendered straight
+    // off the wire by formatServerNumeric on the 'raw' path (#281), not the
+    // parsed JSON this event carries — so nothing whois-related is published
+    // here beyond the modal payload.
     c.on('whois', (event: Record<string, unknown>) => {
       if (!event || !event.nick) return;
       this.publishEphemeral({ type: 'whois_result', whois: event });
-      const text = formatWhoisRaw(event);
-      if (!text) return;
-      this.publish({ type: 'motd', target: this.serverTarget(), text });
     });
 
     // Channel list (`/LIST`). irc-framework batches RPL_LIST every 50 rows and
@@ -2117,20 +2118,6 @@ export function computeFallbackNick(
   return `${base}${attemptIndex + 1}`;
 }
 
-export function formatWhoisRaw(whois: Record<string, unknown> | null | undefined): string | null {
-  if (!whois) return null;
-  const nick = whois.nick;
-  if (typeof nick !== 'string' || !nick) return null;
-  const payload = Object.fromEntries(
-    Object.entries(whois).filter(([, value]) => value !== undefined),
-  );
-  try {
-    return `WHOIS ${nick}: ${JSON.stringify(payload)}`;
-  } catch (_) {
-    return `WHOIS ${nick}`;
-  }
-}
-
 const TLS_CERTIFICATE_VERIFY_HINT_CODES = new Set([
   'DEPTH_ZERO_SELF_SIGNED_CERT',
   'SELF_SIGNED_CERT_IN_CHAIN',
@@ -2222,6 +2209,66 @@ export function formatServerNumeric(
       return `${p[1] || ''} ${p[2] || ''}`.trim();
     case '396': // RPL_HOSTCLOAKING — [nick, hostmask, "is now your displayed host"]
       return p[1] ? `Your hostmask: ${p[1]}` : null;
+    case '364': {
+      // RPL_LINKS — [nick, server, access_via, "<hops> <server info>"] — one
+      // line per server on the network, used to spot netsplits (#312). Note
+      // irc-framework *claims* 364/365 (it caches them and emits a 'server
+      // links' event), so they never reach the 'unknown command' catch-all that
+      // surfaces other unmodelled numerics (#262). We render them here on the
+      // 'raw' path instead — which fires for every line regardless of whether
+      // irc-framework has a handler — so /links output isn't silently dropped.
+      const parts = [p[1], p[2], p[3]].filter((s): s is string => !!s);
+      return parts.length ? parts.join(' ') : null;
+    }
+    case '365': // RPL_ENDOFLINKS — [nick, mask, ":End of /LINKS list."]
+    case '371': // RPL_INFO — [nick, ":<info text>"]
+    case '374': // RPL_ENDOFINFO — [nick, ":End of /INFO list."]
+    case '704': // RPL_HELPSTART — [nick, subject, ":<help text>"]
+    case '705': // RPL_HELPTXT — [nick, subject, ":<help text>"]
+    case '706': // RPL_ENDOFHELP — [nick, subject, ":End of /HELP."]
+      // Trailing-text replies for /links (terminator), /info and /help. Like
+      // LINKS (364) above, irc-framework claims all of these (it emits 'server
+      // links' / 'info' / 'help' events that nothing subscribes to), so they
+      // skip the 'unknown command' catch-all and have to be rendered here on
+      // the 'raw' path (#312). The length guard stops a bare "<numeric> nick"
+      // with no trailing param from echoing the nick back as content.
+      return p.length > 1 ? p[p.length - 1] || null : null;
+    case '276': // RPL_WHOISCERTFP
+    case '307': // RPL_WHOISREGNICK
+    case '310': // RPL_WHOISHELPOP
+    case '311': // RPL_WHOISUSER
+    case '312': // RPL_WHOISSERVER
+    case '313': // RPL_WHOISOPERATOR
+    case '317': // RPL_WHOISIDLE
+    case '318': // RPL_ENDOFWHOIS
+    case '319': // RPL_WHOISCHANNELS
+    case '320': // RPL_WHOISSPECIAL
+    case '330': // RPL_WHOISACCOUNT
+    case '335': // RPL_WHOISBOT
+    case '338': // RPL_WHOISACTUALLY
+    case '344': // RPL_WHOISCOUNTRY
+    case '378': // RPL_WHOISHOST
+    case '379': // RPL_WHOISMODES
+    case '569': // RPL_WHOISASN
+    case '671': // RPL_WHOISSECURE
+    case '314': // RPL_WHOWASUSER  — [nick, was-nick, ident, host, *, ":real name"]
+    case '369': // RPL_ENDOFWHOWAS — [nick, was-nick, ":End of WHOWAS"]
+    case '406': // ERR_WASNOSUCHNICK — [nick, was-nick, ":There was no such nickname"]
+      // WHOIS/WHOWAS family. irc-framework consumes all of these into its
+      // aggregated 'whois'/'whowas' events (the 'whois' one drives the profile
+      // modal, #92) without re-emitting the wire text — so /whois and /whowas
+      // showed nothing in the server buffer, and #281's first pass dumped our
+      // parsed-JSON payload there instead. Render the server's own line here,
+      // stripping the routing nick exactly like the catch-all does for
+      // unmodelled numerics (#281). WHOWAS reuses the WHOIS server (312) and
+      // account (330) numerics, so rendering both families on this one raw path
+      // is what keeps /whowas from double-printing them. Server-specific whois
+      // numerics irc-framework doesn't model already surface via the 'unknown
+      // command' catch-all, so this list only needs the modeled ones. 301
+      // RPL_AWAY is deliberately excluded — it's dual-use (a bare away reply
+      // when you message an away user) and is already handled as the 'away'
+      // presence event.
+      return formatUnknownNumeric({ command: cmd, params: p });
     default:
       return null;
   }
