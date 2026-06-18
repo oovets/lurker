@@ -814,19 +814,20 @@ function onKeydown(e: KeyboardEvent): void {
   // at the start/end of *your line* beats landing at an incidental soft-wrap
   // (issue #234). The two only differ when one logical line wraps; short
   // messages are unaffected. Shift extends from the existing anchor. Mac-gated
-  // for the Cmd variant so we don't grab Super/Win+Arrow; Home/End are
-  // universal. Cmd+↑/↓ (whole draft) and Option/Ctrl+arrows (word / emacs) stay
-  // native. Skipped mid-IME so the keys keep driving the candidate window.
-  if (
-    !e.isComposing &&
-    (e.key === 'Home' ||
-      e.key === 'End' ||
-      (isMac &&
-        e.metaKey &&
-        !e.altKey &&
-        !e.ctrlKey &&
-        (e.key === 'ArrowLeft' || e.key === 'ArrowRight')))
-  ) {
+  // for the Cmd variant so we don't grab Super/Win+Arrow. Only *bare* Home/End
+  // are remapped (Shift still extends) — Ctrl/Alt/Meta+Home/End stay native so
+  // Ctrl+Home/End still jumps to the document ends on Windows/Linux, alongside
+  // Cmd+↑/↓ (whole draft) and Option/Ctrl+arrows (word / emacs). Skipped mid-IME
+  // so the keys keep driving the candidate window.
+  const bareHomeEnd =
+    (e.key === 'Home' || e.key === 'End') && !e.ctrlKey && !e.altKey && !e.metaKey;
+  const macCmdArrow =
+    isMac &&
+    e.metaKey &&
+    !e.altKey &&
+    !e.ctrlKey &&
+    (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+  if (!e.isComposing && (bareHomeEnd || macCmdArrow)) {
     const el = inputEl.value;
     if (el) {
       e.preventDefault();
