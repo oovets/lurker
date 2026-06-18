@@ -11,8 +11,11 @@ import {
   formatSocketCloseErrorMessage,
   formatServerNumeric,
   formatUnknownNumeric,
+  isOverloadedSpeakRejection,
   joinRejectionMessage,
   joinRejectionMessageByTag,
+  sendRejectionTargetKind,
+  sendRejectionText,
 } from './ircConnection.js';
 
 describe('computeFallbackNick', () => {
@@ -274,6 +277,44 @@ describe('join-rejection messages (#260)', () => {
   });
 });
 
+describe('send-rejection routing (#283)', () => {
+  it('maps the irc-framework send-rejection tags to the buffer that owns them', () => {
+    // 404 ERR_CANNOTSENDTOCHAN → the channel; 531 ERR_CANNOTSENDTOUSER → the DM peer.
+    expect(sendRejectionTargetKind('cannot_send_to_channel')).toBe('channel');
+    expect(sendRejectionTargetKind('cannot_send_to_user')).toBe('nick');
+  });
+
+  it('returns null for tags that are not send rejections', () => {
+    // Join rejections and unrelated errors must stay on their own paths.
+    expect(sendRejectionTargetKind('invite_only_channel')).toBeNull();
+    expect(sendRejectionTargetKind('no_such_nick')).toBeNull();
+    expect(sendRejectionTargetKind('irc')).toBeNull();
+  });
+
+  it('treats 477 as a speak rejection only when we are already in the channel', () => {
+    // ERR_NEEDREGGEDNICK is overloaded: a join refusal when we're not in the
+    // channel, a speak refusal when we are. Only the latter is a send rejection.
+    expect(isOverloadedSpeakRejection('477', true)).toBe(true);
+    expect(isOverloadedSpeakRejection('477', false)).toBe(false);
+  });
+
+  it('never treats other numerics as overloaded speak rejections', () => {
+    // 473 (invite-only) and 404 (cannot-send, handled via the tag path) must not
+    // get swept into the 477 disambiguation even if we happen to be in-channel.
+    expect(isOverloadedSpeakRejection('473', true)).toBe(false);
+    expect(isOverloadedSpeakRejection('404', true)).toBe(false);
+  });
+
+  it('leads with the server reason, falling back to a generic hint', () => {
+    expect(sendRejectionText('You need to be identified to speak')).toBe(
+      'Message not delivered — You need to be identified to speak',
+    );
+    // Missing/blank reasons still tell the user the message did not land.
+    expect(sendRejectionText(null)).toMatch(/^Message not delivered —/);
+    expect(sendRejectionText('   ')).toMatch(/^Message not delivered —/);
+  });
+});
+
 describe('canonicalChannelTarget (#268)', () => {
   // this.channels is keyed lowercase; .name holds the case we joined with.
   const channels = new Map([['#christian', { name: '#christian' }]]);
@@ -476,5 +517,218 @@ describe('formatSocketCloseErrorMessage', () => {
         true,
       ),
     ).toBe(`Connection failed (${where}): ECONNREFUSED: connect ECONNREFUSED 127.0.0.1:6697`);
+  });
+});
+
+// End-to-end check that the real irc-framework event handlers route refused
+// outgoing messages to the right buffer (#283). publish/publishEphemeral are
+// stubbed so we can assert the routing decision without a DB or a live socket.
+describe('refused-message handler routing (#283)', () => {
+  function makeConn(): IrcConnection {
+    return new IrcConnection({
+      network: {
+        id: 1,
+        user_id: 1,
+        name: 'n',
+        host: 'irc.example.test',
+        port: 6697,
+        tls: 1,
+        trusted_certificates: 1,
+        nick: 'nick',
+        username: null,
+        realname: null,
+        server_password: null,
+        autoconnect: 1,
+        sasl_account: null,
+        sasl_password: null,
+        connect_commands: null,
+        position: 0,
+        created_at: new Date().toISOString(),
+      },
+      onEvent: () => {},
+    });
+  }
+
+  it('routes ERR_CANNOTSENDTOCHAN (404) inline to the channel the user just sent to', () => {
+    const conn = makeConn();
+    const publish = vi.fn<(event: unknown) => void>();
+    conn.publish = publish;
+    conn.client.say = vi.fn<(target: string, message: string) => void>(); // don't touch a real socket
+    conn.say('#anime', 'hi'); // a real message — its bounce should surface
+
+    conn.client.emit('irc error', {
+      error: 'cannot_send_to_channel',
+      channel: '#anime',
+      reason: 'You need to be identified to talk',
+    });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        target: '#anime',
+        text: 'Message not delivered — You need to be identified to talk',
+      }),
+    );
+  });
+
+  it('routes ERR_CANNOTSENDTOUSER (531) inline to the DM peer the user just messaged', () => {
+    const conn = makeConn();
+    const publish = vi.fn<(event: unknown) => void>();
+    conn.publish = publish;
+    conn.noteUserSend('sleepynick'); // user just sent them a message
+
+    conn.client.emit('irc error', {
+      error: 'cannot_send_to_user',
+      nick: 'sleepynick',
+      reason: 'Cannot send to user',
+    });
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', target: 'sleepynick' }),
+    );
+  });
+
+  it('surfaces 477 inline as a speak rejection when we are already in the channel', () => {
+    const conn = makeConn();
+    conn.upsertChannel('#anime'); // we joined it — so 477 can only be a speak refusal
+    const publish = vi.fn<(event: unknown) => void>();
+    const publishEphemeral = vi.fn<(event: unknown) => void>();
+    conn.publish = publish;
+    conn.publishEphemeral = publishEphemeral;
+    conn.noteUserSend('#anime'); // a real message — its bounce should surface
+
+    conn.client.emit('unknown command', {
+      command: '477',
+      params: ['nick', '#anime', 'You need to be identified to speak'],
+    });
+
+    expect(publishEphemeral).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        target: '#anime',
+        text: 'Message not delivered — You need to be identified to speak',
+      }),
+    );
+  });
+
+  it('stays silent about a refused typing notification, suppresses further typing, and heals on login', () => {
+    const conn = makeConn();
+    conn.upsertChannel('#anime');
+    const publish = vi.fn<(event: unknown) => void>();
+    conn.publish = publish;
+    // Enable the message-tags cap and capture outgoing TAGMSGs.
+    (conn.client as unknown as { network: { cap: { enabled: string[] } } }).network = {
+      cap: { enabled: ['message-tags'] },
+    };
+    const tagmsg = vi.fn<(target: string, tags?: Record<string, string>) => void>();
+    conn.client.tagmsg = tagmsg;
+
+    // First typing notification goes out — we haven't learned the channel is blocked.
+    conn.sendTyping('#anime', 'active');
+    expect(tagmsg).toHaveBeenCalledTimes(1);
+
+    // The server bounces it. No real message was sent, so nothing surfaces inline.
+    conn.client.emit('unknown command', {
+      command: '477',
+      params: ['nick', '#anime', 'You need to be identified to speak'],
+    });
+    expect(publish).not.toHaveBeenCalled();
+
+    // Further typing to that channel is now suppressed (no more bounces).
+    conn.sendTyping('#anime', 'active');
+    expect(tagmsg).toHaveBeenCalledTimes(1);
+
+    // Identifying to services (RPL_LOGGEDIN → 'loggedin') lifts the suppression.
+    conn.client.emit('loggedin', {});
+    conn.sendTyping('#anime', 'active');
+    expect(tagmsg).toHaveBeenCalledTimes(2);
+  });
+
+  it('resumes typing after a /part + /join of a blocked channel', () => {
+    const conn = makeConn();
+    conn.upsertChannel('#anime');
+    conn.publish = vi.fn<(event: unknown) => void>();
+    conn.client.raw = vi.fn<(...args: string[]) => void>(); // swallow the on-join MODE request
+    conn.client.user.nick = 'me';
+    (conn.client as unknown as { network: { cap: { enabled: string[] } } }).network = {
+      cap: { enabled: ['message-tags'] },
+    };
+    const tagmsg = vi.fn<(target: string, tags?: Record<string, string>) => void>();
+    conn.client.tagmsg = tagmsg;
+
+    // Channel gets marked unsendable; typing is suppressed.
+    conn.client.emit('unknown command', {
+      command: '477',
+      params: ['nick', '#anime', 'You need to be identified to speak'],
+    });
+    conn.sendTyping('#anime', 'active');
+    expect(tagmsg).not.toHaveBeenCalled();
+
+    // Re-joining is a clean "try again" — the mark clears and typing flows.
+    conn.client.emit('join', { channel: '#anime', nick: 'me' });
+    conn.sendTyping('#anime', 'active');
+    expect(tagmsg).toHaveBeenCalledTimes(1);
+  });
+
+  it('resetSendState (run on reconnect) drops speak-permission marks and stale attribution', () => {
+    // The 'registered' handler calls resetSendState so a new socket starts clean.
+    // Test it directly — emitting 'registered' would drag in irc-framework's own
+    // ping-timer internals. Without this, a recent pre-reconnect send could make
+    // the first refused bounce on the new socket look like a real failed message.
+    const conn = makeConn();
+    conn.publish = vi.fn<(event: unknown) => void>();
+    conn.upsertChannel('#anime');
+    conn.noteUserSend('#anime');
+    conn.handleSendRejection('#anime', 'You need to be identified to speak', {});
+    expect(conn.recentUserSend('#anime')).toBe(true);
+    expect(conn.unsendableTargets.has('#anime')).toBe(true);
+
+    conn.resetSendState();
+
+    expect(conn.recentUserSend('#anime')).toBe(false);
+    expect(conn.unsendableTargets.has('#anime')).toBe(false);
+  });
+
+  it('prunes stale send-attribution entries so the map stays bounded', () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeConn();
+      conn.noteUserSend('#a');
+      conn.noteUserSend('bob');
+      expect(conn.lastUserSendAt.size).toBe(2);
+
+      // Past the attribution window, the next send prunes the now-stale entries.
+      vi.advanceTimersByTime(16_000);
+      conn.noteUserSend('#c');
+      expect(conn.lastUserSendAt.size).toBe(1);
+      expect(conn.recentUserSend('#a')).toBe(false);
+      expect(conn.recentUserSend('#c')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps 477 as a "Couldn’t join" toast when we are not in the channel', () => {
+    const conn = makeConn();
+    const publish = vi.fn<(event: unknown) => void>();
+    const publishEphemeral = vi.fn<(event: unknown) => void>();
+    conn.publish = publish;
+    conn.publishEphemeral = publishEphemeral;
+
+    conn.client.emit('unknown command', {
+      command: '477',
+      params: ['nick', '#secret', 'Cannot join channel (+r)'],
+    });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(publishEphemeral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'join-error',
+        target: '#secret',
+        text: 'This channel requires a registered nickname.',
+      }),
+    );
   });
 });

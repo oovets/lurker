@@ -51,6 +51,12 @@ const NON_PERSISTED_TYPES = new Set([
   'peer-presence',
 ]);
 
+// How recently the user must have sent a real message to a target for a send
+// rejection (404/477/531) to be attributed to that message and surfaced inline.
+// Beyond this window the bounce is treated as an automated TAGMSG/typing reply
+// and swallowed. Generous — IRC error numerics come back in well under a second.
+const SEND_REJECTION_ATTRIBUTION_MS = 15000;
+
 // ---------------------------------------------------------------------------
 // Internal shapes
 // ---------------------------------------------------------------------------
@@ -191,6 +197,20 @@ export class IrcConnection {
   // Local source port of the live socket, while identd is enabled — so we can
   // unregister this connection's ident from the identd map when it closes.
   identdLocalPort: number | null;
+  // Targets (channels or nicks) the server has refused our outgoing messages
+  // to — a +R/+M channel that needs a registered nick to speak, a +R user, etc.
+  // Learned from the first send rejection and used to stop firing typing
+  // TAGMSGs that would each bounce back as another rejection (#283). Lowercase
+  // keys. This never blocks the user's actual messages (those always go out and
+  // surface the error); it only gates typing notifications. Cleared when speak
+  // permission may have changed: on RPL_LOGGEDIN, on (re)registration, and when
+  // we (re)join the channel — so a /part + /join or a reconnect resumes typing.
+  unsendableTargets: Set<string>;
+  // Last time the user sent a real PRIVMSG/NOTICE/ACTION to a target (lowercase
+  // key → epoch ms). Lets the send-rejection handler tell an actual failed
+  // message (surface it inline) from an automated TAGMSG/typing bounce (stay
+  // silent) — the rejection numeric doesn't say which command it refused (#283).
+  lastUserSendAt: Map<string, number>;
 
   constructor({ network, onEvent }: { network: Network; onEvent: (event: EnrichedEvent) => void }) {
     this.network = network;
@@ -242,6 +262,8 @@ export class IrcConnection {
     this.regainNick = null;
     this.pendingRegainSetup = false;
     this.identdLocalPort = null;
+    this.unsendableTargets = new Set();
+    this.lastUserSendAt = new Map();
     this.bind();
   }
 
@@ -439,18 +461,32 @@ export class IrcConnection {
     c.on('unknown command', (cmd: { command?: string; params?: string[] }) => {
       const command = (cmd?.command || '').toString();
       const params = Array.isArray(cmd?.params) ? (cmd.params as string[]) : [];
+      // These numerics arrive as [nick, #channel, reason].
+      const channel = typeof params[1] === 'string' ? params[1] : '';
+      const reason = params[params.length - 1] || null;
+      // ERR_NEEDREGGEDNICK (477) to a channel we're already in is a speak
+      // rejection, not a join failure — surface it inline in that channel so
+      // the user sees why their message didn't land, instead of a misleading
+      // "Couldn't join" toast (#283). publish() canonicalizes the channel case.
+      if (
+        channel &&
+        isOverloadedSpeakRejection(command, this.channels.has(channel.toLowerCase()))
+      ) {
+        this.handleSendRejection(channel, reason, { command, params });
+        return;
+      }
       // Channel-join rejections irc-framework doesn't model (476/477) arrive
-      // here as [nick, #channel, reason]. Route them to the channel as an
-      // ephemeral toast so the failure surfaces where the user tried to join,
-      // not buried in the server buffer (#260). The client never opened the
-      // buffer (it waits for channel-joined), so this is toast-only.
+      // here too. Route them to the channel as an ephemeral toast so the failure
+      // surfaces where the user tried to join, not buried in the server buffer
+      // (#260). The client never opened the buffer (it waits for channel-joined),
+      // so this is toast-only.
       const joinMsg = joinRejectionMessage(command);
-      if (joinMsg && typeof params[1] === 'string' && params[1]) {
+      if (joinMsg && channel) {
         this.publishEphemeral({
           type: 'join-error',
-          target: params[1],
+          target: channel,
           text: joinMsg,
-          reason: params[params.length - 1] || null,
+          reason,
         });
         return;
       }
@@ -465,9 +501,20 @@ export class IrcConnection {
       this.publish({ type: 'motd', target: this.serverTarget(), text });
     });
 
+    // RPL_LOGGEDIN (900): the user identified to services mid-session (NickServ
+    // or SASL). That's exactly what +R/+M channels were waiting on, so drop the
+    // unsendable set and let the next message re-probe — typing resumes too (#283).
+    c.on('loggedin', () => {
+      this.unsendableTargets.clear();
+    });
+
     c.on('registered', (event: Record<string, unknown>) => {
       this.userModes.clear();
       this.lagMs = null;
+      // Fresh registration means a new socket — forget per-connection send
+      // state so speak permission is re-probed and stale attribution can't leak
+      // across the reconnect (#283).
+      this.resetSendState();
       // From here on, 'nick in use' is the user's /nick attempt — not us racing
       // to register. Freeze the fallback ladder.
       this.preRegistered = false;
@@ -968,6 +1015,10 @@ export class IrcConnection {
       }
       if (eventNick === c.user.nick) {
         this.publish({ type: 'channel-joined', target: eventChannel });
+        // Re-joining is a clean "try again" gesture: drop any stale
+        // can't-speak-here mark so typing notifications resume. If we still
+        // can't speak, the next attempt re-learns it from the bounce (#283).
+        this.unsendableTargets.delete(eventChannel.toLowerCase());
         systemLog.log({
           userId: this.network.user_id,
           scope: this.logScope(),
@@ -1476,6 +1527,18 @@ export class IrcConnection {
         });
         return;
       }
+      // Send rejections (ERR_CANNOTSENDTOCHAN 404 / ERR_CANNOTSENDTOUSER 531):
+      // the message we just optimistically echoed never landed. Surface an
+      // inline error in the buffer the user sent to — the channel (event.channel)
+      // or the DM peer (event.nick) — instead of letting it fall through to the
+      // server buffer, where the optimistic echo makes the send look fine (#283).
+      const sendRejectKind = sendRejectionTargetKind(tag);
+      const sendRejectTarget =
+        sendRejectKind === 'channel' ? rejectChannel : sendRejectKind === 'nick' ? eventNick : null;
+      if (sendRejectKind && sendRejectTarget) {
+        this.handleSendRejection(sendRejectTarget, reason, event);
+        return;
+      }
       // ERR_UNKNOWNCOMMAND (421) carries the rejected command name in
       // event.command (irc-framework parses it from the numeric's params).
       // Include it so the buffer line names the offending command —
@@ -1933,17 +1996,64 @@ export class IrcConnection {
   }
   say(target: string, text: string): void {
     if (isDmTargetName(target)) this.trackDmPeer(target);
+    this.noteUserSend(target);
     this.client.say(target, text);
   }
   action(target: string, text: string): void {
     if (isDmTargetName(target)) this.trackDmPeer(target);
+    this.noteUserSend(target);
     this.client.action(target, text);
   }
   notice(target: string, text: string): void {
     // Unlike say/action we don't trackDmPeer here: outgoing NOTICEs mirror the
     // inbound rule (NOTICEs don't establish a tracked DM peer), so notice-ing a
     // service or bot doesn't spin up presence tracking for it.
+    this.noteUserSend(target);
     this.client.notice(target, text);
+  }
+
+  // Record that the user just sent a real message to `target`. handleSendRejection
+  // reads this to tell an actual failed message from an automated TAGMSG/typing
+  // bounce — the rejection numeric alone doesn't say which command it refused.
+  noteUserSend(target: string): void {
+    const now = Date.now();
+    // Prune entries past the attribution window before adding. They can never
+    // satisfy recentUserSend again, so keeping them would let the map grow
+    // unbounded as the user messages more one-off DM targets over a long-lived
+    // connection. The live set is tiny — only targets messaged in the last few
+    // seconds — so this stays cheap.
+    for (const [key, at] of this.lastUserSendAt) {
+      if (now - at > SEND_REJECTION_ATTRIBUTION_MS) this.lastUserSendAt.delete(key);
+    }
+    this.lastUserSendAt.set(target.toLowerCase(), now);
+  }
+
+  recentUserSend(target: string): boolean {
+    const at = this.lastUserSendAt.get(target.toLowerCase());
+    return at != null && Date.now() - at <= SEND_REJECTION_ATTRIBUTION_MS;
+  }
+
+  // The server refused an outgoing message to `target` (ERR_CANNOTSENDTOCHAN
+  // 404 / ERR_CANNOTSENDTOUSER 531 / ERR_NEEDREGGEDNICK 477 while joined).
+  // Remember the target is unsendable so we stop firing typing TAGMSGs that
+  // would each bounce (#283), then surface the failure inline — but only when
+  // the user actually just sent a message there. Typing notifications and other
+  // automated sends bounce too; those fail silently instead of spamming the
+  // buffer with "Message not delivered".
+  handleSendRejection(target: string, reason: string | null | undefined, raw: unknown): void {
+    this.unsendableTargets.add(target.toLowerCase());
+    if (!this.recentUserSend(target)) return;
+    this.publish({ type: 'error', target, text: sendRejectionText(reason), raw });
+  }
+
+  // Forget per-connection send state: the speak-permission marks and the send-
+  // attribution timestamps. Both are tied to the live socket, so a reconnect
+  // must start clean — otherwise a pre-reconnect send could mis-attribute the
+  // first refused bounce on the new socket as a message the user just sent (and
+  // a stale unsendable mark could suppress typing the user can now do) (#283).
+  resetSendState(): void {
+    this.unsendableTargets.clear();
+    this.lastUserSendAt.clear();
   }
   raw(line: string): void {
     // Strip CR/LF/NUL before the line hits the socket. irc-framework's
@@ -1964,6 +2074,12 @@ export class IrcConnection {
     // so an ungated send spams an error on each keystroke. Typing indicators
     // are a best-effort nicety; no cap, no send.
     if (!(this.client.network?.cap?.enabled || []).includes('message-tags')) return;
+    // Suppress typing TAGMSGs to a target the server has refused our messages to
+    // (a +R/+M channel needing a registered nick to speak, a +R user, ...).
+    // Every typing TAGMSG to it bounces as another send rejection; we learned it
+    // can't be spoken to from the first bounce, so stop pinging it until that
+    // clears on (re)login (#283). Same spirit as the offline-peer guard below.
+    if (this.unsendableTargets.has(target.toLowerCase())) return;
     // Suppress typing TAGMSGs to peers we know are offline — otherwise each
     // keystroke generates an ERR_NOSUCHNICK reply that lands as a persisted
     // error in the DM buffer (and pings push subscribers). The user finds
@@ -2329,6 +2445,45 @@ export function joinRejectionMessage(numeric: string): string | null {
 
 export function joinRejectionMessageByTag(tag: string): string | null {
   return JOIN_REJECTION_TAGS[tag] || null;
+}
+
+// Send rejections (an outgoing PRIVMSG/NOTICE the server refused) differ from
+// join rejections: the user is sitting in the buffer they sent to, having
+// already seen the message optimistically echoed (ircManager.send). So we
+// surface these as an inline error line in that buffer — not a "Couldn't join"
+// toast and not the easy-to-miss server buffer (#283). irc-framework models
+// ERR_CANNOTSENDTOCHAN (404) and ERR_CANNOTSENDTOUSER (531) as 'irc error'
+// events with these tags; the value says which buffer the failure belongs in.
+const SEND_REJECTION_TAGS: Record<string, 'channel' | 'nick'> = {
+  cannot_send_to_channel: 'channel',
+  cannot_send_to_user: 'nick',
+};
+
+export function sendRejectionTargetKind(tag: string): 'channel' | 'nick' | null {
+  return SEND_REJECTION_TAGS[tag] || null;
+}
+
+// ERR_NEEDREGGEDNICK (477) is overloaded: a server sends it both to refuse a
+// JOIN (the channel requires a registered nick, +R) and to refuse a PRIVMSG to
+// a channel you are already in (you must identify to speak). irc-framework
+// doesn't model 477 at all, so both arrive via the 'unknown command' event with
+// no way to tell them apart from the numeric alone. The reliable signal is
+// whether we're currently in the channel — if we are, it cannot be a join
+// failure, so it's a speak rejection and belongs inline in that channel rather
+// than as a misleading "Couldn't join" toast (#283).
+export function isOverloadedSpeakRejection(numeric: string, joinedToChannel: boolean): boolean {
+  return numeric === '477' && joinedToChannel;
+}
+
+// User-facing line for a refused outgoing message. The buffer it lands in makes
+// the target obvious, so we lead with the server's own reason (which usually
+// names the requirement, e.g. "you need to be identified to a registered
+// account to speak") and fall back to a generic hint when the server omits one.
+export function sendRejectionText(reason: string | null | undefined): string {
+  const r = (reason || '').trim();
+  return r
+    ? `Message not delivered — ${r}`
+    : 'Message not delivered — the server rejected it (you may need to register or identify your nick).';
 }
 
 // Render an unhandled server numeric into a single server-buffer line. Only
