@@ -37,6 +37,29 @@ function key(networkId: number | string, target: string) {
   return `${networkId}::${target}`;
 }
 
+// Resolve the storage key of an already-open buffer for (networkId, target),
+// folding case so an inconsistently-cased name reuses the open buffer instead
+// of forking a second one. IRC targets are case-insensitive and some servers
+// hand us divergent casing (#289 for channels; #327 for live DMs), so exact-key
+// identity alone forks duplicates. Exact key is tried first as the common fast
+// path; the O(n) folded scan only runs on a miss. The flat ':'-sentinels
+// (`:server:`, `:friends:`…) are fixed keys — exact only, never folded.
+function resolveExistingKey(
+  buffers: Record<string, Buffer>,
+  networkId: number | string,
+  target: string,
+): string | null {
+  const exact = key(networkId, target);
+  if (buffers[exact]) return exact;
+  if (target.startsWith(':')) return null;
+  const nid = Number(networkId);
+  const lower = target.toLowerCase();
+  for (const [k, b] of Object.entries(buffers)) {
+    if (b.networkId === nid && b.target.toLowerCase() === lower) return k;
+  }
+  return null;
+}
+
 function typingKey(networkId: number | string, target: string, nick: string) {
   return `${networkId}::${target}::${nick.toLowerCase()}`;
 }
@@ -184,10 +207,14 @@ function ensureBuffer(
   networkId: number | string,
   target: string,
 ): Buffer {
+  // Resolve case-insensitively before creating: a DM/channel already open under
+  // a different casing is the same buffer (#327), so reuse it rather than fork a
+  // second entry. Only materialize when nothing exists under any casing — and
+  // then under the target's own casing, so the first writer's case is canonical.
+  const existing = resolveExistingKey(state.buffers, networkId, target);
+  if (existing) return state.buffers[existing];
   const k = key(networkId, target);
-  if (!state.buffers[k]) {
-    state.buffers[k] = makeBuffer(networkId, target);
-  }
+  state.buffers[k] = makeBuffer(networkId, target);
   return state.buffers[k];
 }
 
@@ -198,12 +225,17 @@ export const useBuffersStore = defineStore('buffers', {
   getters: {
     list: (state) => Object.values(state.buffers),
     byKey: (state) => (k: string) => state.buffers[k] || null,
-    // True only while the buffer is live in the store. A closed buffer is
-    // dropped entirely (see drop()), so this is how callers tell "open" from
-    // "closed/parted-away" before activating — activate() would otherwise
-    // recreate an empty shell and strand the UI in a half-state.
+    // True only while a buffer for (networkId, target) is live in the store,
+    // resolved case-insensitively (#327) like its findByTarget/findDm siblings.
+    // A closed buffer is dropped entirely (see drop()), so this is how callers
+    // tell "open" from "closed/parted-away" before activating — activate() would
+    // otherwise recreate an empty shell and strand the UI in a half-state. The
+    // case fold matters because the toast/jump focus guards gate activate() on
+    // the raw server-cased target (highlight toast → event.target, friend-online
+    // → event.nick): an exact-key lookup would report a buffer that's open under
+    // a different casing as closed and refuse to focus its own notification.
     isOpen: (state) => (networkId: number | string, target: string) =>
-      !!state.buffers[`${networkId}::${target}`],
+      resolveExistingKey(state.buffers, networkId, target) !== null,
     forNetwork: (state) => (networkId: number | string) =>
       Object.values(state.buffers).filter((b) => b.networkId === networkId),
     // The open DM buffer for a (network, nick), matched case-insensitively so we
@@ -235,16 +267,8 @@ export const useBuffersStore = defineStore('buffers', {
     findByTarget:
       (state) =>
       (networkId: number | string, target: string): Buffer | null => {
-        const exact = state.buffers[`${networkId}::${target}`];
-        if (exact) return exact;
-        if (target.startsWith(':')) return null;
-        const nid = Number(networkId);
-        const lower = target.toLowerCase();
-        return (
-          Object.values(state.buffers).find(
-            (b) => b.networkId === nid && b.target.toLowerCase() === lower,
-          ) ?? null
-        );
+        const k = resolveExistingKey(state.buffers, networkId, target);
+        return k ? state.buffers[k] : null;
       },
   },
   actions: {
@@ -276,7 +300,12 @@ export const useBuffersStore = defineStore('buffers', {
       if (buf.oldestId == null && event.id != null) buf.oldestId = event.id;
       if (event.id != null) {
         const networks = useNetworksStore();
-        const isActive = networks.activeKey === `${event.networkId}::${event.target}`;
+        // Compare against the resolved buffer's canonical key, not the event's
+        // (possibly divergently-cased) target — otherwise a live DM arriving as
+        // `bob` while the user sits in the `Bob` buffer reads as inactive and
+        // the divider/read-sync below silently skips (#327). Mirrors the same
+        // resolve-then-compare applyReadState does.
+        const isActive = networks.activeKey === `${buf.networkId}::${buf.target}`;
         if (isActive) {
           // While the user is sitting in this buffer, keep the divider
           // tracking the bottom UNLESS there's already an unread boundary
@@ -295,8 +324,8 @@ export const useBuffersStore = defineStore('buffers', {
             buf.lastReadId = event.id;
             socketSend({
               type: 'mark-read',
-              networkId: event.networkId,
-              target: event.target,
+              networkId: buf.networkId,
+              target: buf.target,
               messageId: event.id,
             });
           }
@@ -304,7 +333,10 @@ export const useBuffersStore = defineStore('buffers', {
       }
       const speakerKey = event.nick?.toLowerCase();
       if (speakerKey && buf.typing[speakerKey]) {
-        clearTypingTimer(event.networkId, event.target, event.nick!);
+        // Key off the resolved buffer's target, not event.target — setTyping
+        // armed the expiry timer under buf.target, so a divergently-cased event
+        // would otherwise miss it and strand the timer (#327).
+        clearTypingTimer(buf.networkId, buf.target, event.nick!);
         delete buf.typing[speakerKey];
       }
       return true;
@@ -650,17 +682,26 @@ export const useBuffersStore = defineStore('buffers', {
       buf.speakers = next;
     },
     drop(networkId: number | string, target: string) {
+      // Resolve case-insensitively (#327) so a divergently-cased close target
+      // (the server doesn't canonicalize DM casing — the #327 root cause) still
+      // removes the buffer instead of silently leaving a sidebar ghost. Key all
+      // bookkeeping off the resolved buffer's canonical target below.
+      const bufKey = resolveExistingKey(this.buffers, networkId, target);
+      if (!bufKey) return;
+      const buf = this.buffers[bufKey];
       // Cancel any pending typing-expiry timers for this buffer before it (and
       // its typing entries) vanishes — otherwise a timer armed while a peer was
-      // typing sits in the module-level map until it fires on its own.
-      const prefix = `${networkId}::${target}::`;
+      // typing sits in the module-level map until it fires on its own. Timers
+      // are keyed by the canonical target (setTyping uses buf.target), so the
+      // prefix has to match that, not the raw close-event casing.
+      const prefix = `${buf.networkId}::${buf.target}::`;
       for (const [k, id] of typingTimers) {
         if (k.startsWith(prefix)) {
           clearTimeout(id);
           typingTimers.delete(k);
         }
       }
-      delete this.buffers[key(networkId, target)];
+      delete this.buffers[bufKey];
     },
     // Called from useSessionReset before $reset(). The state reset will wipe
     // every buffer (and therefore every typing indicator), but the
@@ -738,7 +779,11 @@ export const useBuffersStore = defineStore('buffers', {
       return ok;
     },
     setJoined(networkId: number | string, target: string, joined: boolean) {
-      const buf = this.buffers[key(networkId, target)];
+      // Resolve case-insensitively (#327): channel-joined/-parted already arrive
+      // canonical from the server (canonicalChannelTarget), but fold here too so
+      // a divergently-cased target never misses the open buffer and leaves it
+      // stuck rendering dimmed.
+      const buf = this.findByTarget(networkId, target);
       if (!buf) return;
       buf.joined = !!joined;
     },
@@ -816,7 +861,17 @@ export const useBuffersStore = defineStore('buffers', {
     // focused (see pushMessage), so leaving it just drops local state.
     activate(networkId: number | string, target: string) {
       const networks = useNetworksStore();
-      const newKey = `${networkId}::${target}`;
+      // Resolve to the canonical open buffer first (case-insensitive): a DM
+      // activated from a member-list nick, /query, the profile modal, or a
+      // deep-link may carry a different casing than the buffer that's already
+      // open (#327). Focusing the raw casing would fork a duplicate via
+      // ensureBuffer and — worse — point activeKey at a key no buffer is stored
+      // under, so useActiveBuffer's byKey(activeKey) returns null and blanks the
+      // chat view. canonTarget is the existing buffer's casing, or the raw
+      // target when none is open yet (first writer's case becomes canonical).
+      const existing = this.findByTarget(networkId, target);
+      const canonTarget = existing ? existing.target : target;
+      const newKey = `${networkId}::${canonTarget}`;
       const prevKey = networks.activeKey;
       if (prevKey && prevKey !== newKey) {
         const prev = this.buffers[prevKey];
@@ -835,8 +890,8 @@ export const useBuffersStore = defineStore('buffers', {
             this.clearDetached(prev.networkId, prev.target, { wipeMessages: true });
         }
       }
-      networks.setActive(networkId, target);
-      const buf = ensureBuffer(this, networkId, target);
+      networks.setActive(networkId, canonTarget);
+      const buf = ensureBuffer(this, networkId, canonTarget);
       // Snapshot the divider from the CURRENT lastReadId before we advance
       // it below. The divider stays pinned to this snapshot for the
       // duration of the visit (cleared on switch-away).
@@ -861,7 +916,7 @@ export const useBuffersStore = defineStore('buffers', {
           socketSend({
             type: 'mark-read',
             networkId,
-            target,
+            target: canonTarget,
             messageId: lastId,
           });
         }
@@ -872,7 +927,7 @@ export const useBuffersStore = defineStore('buffers', {
       // do its own mark-read against the new tail.
       if (buf.pendingRefetch) {
         buf.pendingRefetch = false;
-        this.reattachToLive(networkId, target);
+        this.reattachToLive(networkId, canonTarget);
       } else if (
         buf.messages.length === 0 &&
         buf.hasMoreOlder &&
@@ -896,14 +951,14 @@ export const useBuffersStore = defineStore('buffers', {
         // that leaves messages.length=0 but flips hasMoreOlder to false —
         // without this guard we'd refire the same empty fetch on every
         // re-activate.
-        this.reattachToLive(networkId, target);
+        this.reattachToLive(networkId, canonTarget);
       }
       // For DMs, ask the server to WHOIS-probe the peer so the banner/sidebar
       // dim reflect current state rather than a possibly-stale cached value.
       // The probe is silent (no /whois reply in the server buffer); only the
       // resulting peer-presence event flows back to update local state.
-      if (target && !target.startsWith('#') && !target.startsWith(':server:')) {
-        socketSend({ type: 'probe-presence', networkId, nick: target });
+      if (canonTarget && !canonTarget.startsWith('#') && !canonTarget.startsWith(':server:')) {
+        socketSend({ type: 'probe-presence', networkId, nick: canonTarget });
       }
     },
     setTyping(

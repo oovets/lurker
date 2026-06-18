@@ -65,7 +65,12 @@ export function useJumpToMessage({ pendingScrollId, afterActivate }: JumpToMessa
     buffers.activate(networkId, target);
     if (typeof afterActivate === 'function') afterActivate();
 
-    const buf = buffers.byKey(`${networkId}::${target}`) as any;
+    // Resolve case-insensitively (#327): the jump target may be the raw
+    // server-cased name (push deep-link, search hit) while the buffer is stored
+    // under a different casing. An exact-key byKey() would miss it, skipping the
+    // in-memory scroll fast path and stranding the message-landed watch on a
+    // null buffer. findByTarget folds to the canonical buffer activate() opened.
+    const buf = buffers.findByTarget(networkId, target) as any;
     const hasMessage = buf?.messages?.some((m: any) => m.id === messageId);
     // A row at or below the /clear marker is loaded but filtered out at
     // render time. Detaching the buffer suppresses the filter — no fetch
