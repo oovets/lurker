@@ -672,6 +672,25 @@ describe('refused-message handler routing (#283)', () => {
     expect(tagmsg).toHaveBeenCalledTimes(1);
   });
 
+  it('resetSendState (run on reconnect) drops speak-permission marks and stale attribution', () => {
+    // The 'registered' handler calls resetSendState so a new socket starts clean.
+    // Test it directly — emitting 'registered' would drag in irc-framework's own
+    // ping-timer internals. Without this, a recent pre-reconnect send could make
+    // the first refused bounce on the new socket look like a real failed message.
+    const conn = makeConn();
+    conn.publish = vi.fn<(event: unknown) => void>();
+    conn.upsertChannel('#anime');
+    conn.noteUserSend('#anime');
+    conn.handleSendRejection('#anime', 'You need to be identified to speak', {});
+    expect(conn.recentUserSend('#anime')).toBe(true);
+    expect(conn.unsendableTargets.has('#anime')).toBe(true);
+
+    conn.resetSendState();
+
+    expect(conn.recentUserSend('#anime')).toBe(false);
+    expect(conn.unsendableTargets.has('#anime')).toBe(false);
+  });
+
   it('prunes stale send-attribution entries so the map stays bounded', () => {
     vi.useFakeTimers();
     try {

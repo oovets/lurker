@@ -511,11 +511,10 @@ export class IrcConnection {
     c.on('registered', (event: Record<string, unknown>) => {
       this.userModes.clear();
       this.lagMs = null;
-      // Fresh registration: re-probe send permission everywhere. A reconnect (or
-      // a SASL login during this handshake) may have changed whether we can
-      // speak in the channels we were blocked from, so forget the stale set and
-      // let the next real attempt re-learn it (#283).
-      this.unsendableTargets.clear();
+      // Fresh registration means a new socket — forget per-connection send
+      // state so speak permission is re-probed and stale attribution can't leak
+      // across the reconnect (#283).
+      this.resetSendState();
       // From here on, 'nick in use' is the user's /nick attempt — not us racing
       // to register. Freeze the fallback ladder.
       this.preRegistered = false;
@@ -2045,6 +2044,16 @@ export class IrcConnection {
     this.unsendableTargets.add(target.toLowerCase());
     if (!this.recentUserSend(target)) return;
     this.publish({ type: 'error', target, text: sendRejectionText(reason), raw });
+  }
+
+  // Forget per-connection send state: the speak-permission marks and the send-
+  // attribution timestamps. Both are tied to the live socket, so a reconnect
+  // must start clean — otherwise a pre-reconnect send could mis-attribute the
+  // first refused bounce on the new socket as a message the user just sent (and
+  // a stale unsendable mark could suppress typing the user can now do) (#283).
+  resetSendState(): void {
+    this.unsendableTargets.clear();
+    this.lastUserSendAt.clear();
   }
   raw(line: string): void {
     // Strip CR/LF/NUL before the line hits the socket. irc-framework's
