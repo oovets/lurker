@@ -6,9 +6,11 @@ import {
   emojiGlyph,
   findActiveShortcode,
   findCompletedShortcode,
+  frequentEmoji,
   loadEmoji,
   onEmojiLoaded,
   rankShortcodes,
+  searchEmojiSync,
   shortcodeScanRegex,
 } from './emojiShortcodes.js';
 
@@ -31,6 +33,20 @@ describe('findActiveShortcode', () => {
     expect(findActiveShortcode('hello world', 11)).toBeNull();
     expect(findActiveShortcode('', 0)).toBeNull();
     expect(findActiveShortcode(':', 1)).toBeNull();
+  });
+
+  it('matches a bare `:` with an empty name when allowEmpty (issue #348)', () => {
+    expect(findActiveShortcode(':', 1, true)).toEqual({ name: '', start: 0, end: 1 });
+    expect(findActiveShortcode('hi :', 4, true)).toEqual({ name: '', start: 3, end: 4 });
+  });
+
+  it('still captures a partial query under allowEmpty', () => {
+    expect(findActiveShortcode(':sm', 3, true)).toEqual({ name: 'sm', start: 0, end: 3 });
+  });
+
+  it('does not match a `:` glued to a word or number even under allowEmpty', () => {
+    expect(findActiveShortcode('word:', 5, true)).toBeNull();
+    expect(findActiveShortcode('12:', 3, true)).toBeNull();
   });
 
   it('does not trigger mid-word or after a digit', () => {
@@ -171,6 +187,38 @@ describe('emojiGlyph', () => {
   it('returns null for an unknown shortcode', async () => {
     await loadEmoji();
     expect(emojiGlyph('definitely_not_an_emoji')).toBeNull();
+  });
+});
+
+describe('searchEmojiSync', () => {
+  it('returns ranked matches once the table has loaded', async () => {
+    await loadEmoji();
+    expect(searchEmojiSync('tada')[0]).toEqual({ name: 'tada', emoji: '🎉' });
+  });
+
+  it('respects the limit', async () => {
+    await loadEmoji();
+    expect(searchEmojiSync('a', 5).length).toBeLessThanOrEqual(5);
+  });
+
+  it('returns nothing for a non-matching query', async () => {
+    await loadEmoji();
+    expect(searchEmojiSync('definitely_not_an_emoji')).toEqual([]);
+  });
+});
+
+describe('frequentEmoji', () => {
+  it('returns a non-empty static set, every entry resolving to a real glyph', async () => {
+    await loadEmoji();
+    const f = frequentEmoji();
+    expect(f.length).toBeGreaterThan(0);
+    expect(f.every((m) => typeof m.emoji === 'string' && m.emoji.length > 0)).toBe(true);
+    expect(f.some((m) => m.name === 'tada')).toBe(true);
+  });
+
+  it('respects the limit', async () => {
+    await loadEmoji();
+    expect(frequentEmoji(5).length).toBeLessThanOrEqual(5);
   });
 });
 

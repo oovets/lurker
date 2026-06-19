@@ -97,6 +97,18 @@
       @select="onHistorySelect"
       @close="closeHistoryPicker"
     />
+    <!-- Desktop `:shortcode:` emoji panel (issue #348). The vertical-popover
+         counterpart to the mobile emoji strip — refreshPicker opens this on
+         desktop and the StatusBar strip on mobile. Opens on a bare `:` with a
+         frequently-used set, then filters as you type. -->
+    <EmojiPicker
+      ref="emojiPickerEl"
+      :open="emojiPickerOpen"
+      :query="emojiPickerQuery"
+      :anchor="formEl"
+      @select="onEmojiSelect"
+      @close="closeEmojiPicker"
+    />
     <Teleport to="body">
       <LongMessageUploadModal
         v-if="longMessageModalOpen"
@@ -139,6 +151,7 @@ import type { EmojiMatch } from '../utils/emojiData.js';
 import NickPicker from './NickPicker.vue';
 import ChannelPicker from './ChannelPicker.vue';
 import HistoryPicker from './HistoryPicker.vue';
+import EmojiPicker from './EmojiPicker.vue';
 import LongMessageUploadModal from './LongMessageUploadModal.vue';
 import { useSelfLabel } from '../composables/useSelfLabel.js';
 import { useViewport } from '../composables/useViewport.js';
@@ -207,6 +220,14 @@ let stripTokenEnd = -1;
 // `loadEmoji`), so nothing here pulls it into the initial bundle.
 let emojiTokenStart = -1;
 let emojiTokenEnd = -1;
+// Desktop `:` emoji picker (issue #348) — the vertical-popover counterpart to
+// the mobile strip. Like the nick/channel pickers it's a position:fixed popover
+// anchored to the form, so its open/query state lives here; the mobile strip
+// keeps using the useComposerOverlay emoji state. refreshPicker routes to one or
+// the other by platform, and both share the emojiToken{Start,End} span above.
+const emojiPickerOpen = ref(false);
+const emojiPickerQuery = ref('');
+const emojiPickerEl = ref<InstanceType<typeof EmojiPicker> | null>(null);
 
 const active = computed(() => networks.activeBuffer);
 
@@ -548,6 +569,7 @@ function onBlur() {
   // StatusBar — picking a chip keeps focus (mousedown.prevent) so this never
   // races a selection.
   closeEmojiStrip();
+  closeEmojiPicker();
   // Force the active buffer's draft to the server now rather than waiting on
   // the debounce timer — covers refocus into a different tab or mobile
   // app-switch without losing the in-progress text.
@@ -785,6 +807,23 @@ function onKeydown(e: KeyboardEvent): void {
       return;
     }
   }
+  // Desktop emoji picker (issue #348): while open with candidates it owns the
+  // nav keys — arrows move the highlight, Tab/Enter confirm; Escape is left to
+  // the popover's own document listener. Mobile uses the emoji-strip block
+  // above instead (the two are never open at once). Shift+Enter still newlines.
+  if (emojiPickerOpen.value && !e.isComposing && emojiPickerEl.value?.hasCandidates()) {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      if (!e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        emojiPickerEl.value.moveActive(e.key === 'ArrowUp' ? -1 : 1);
+        return;
+      }
+    } else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault();
+      emojiPickerEl.value.confirmActive();
+      return;
+    }
+  }
   // The previous-input recall menu (the `>` prompt's popover) owns the nav keys
   // while it's open with entries: arrows move the highlighted line, Tab or Enter
   // recall it into the composer, Escape is left to the popover's own document
@@ -954,6 +993,13 @@ function closeEmojiStrip() {
   emojiTokenEnd = -1;
 }
 
+function closeEmojiPicker() {
+  emojiPickerOpen.value = false;
+  emojiPickerQuery.value = '';
+  emojiTokenStart = -1;
+  emojiTokenEnd = -1;
+}
+
 // Open/refresh the emoji suggester for the shortcode under the caret. Async
 // because the emoji table is a lazily-loaded chunk; the candidate set is
 // re-derived from live text once it resolves, so a fast typist (or an
@@ -995,9 +1041,12 @@ function onEmojiSelect(item: EmojiMatch): void {
   // re-sync the span via refreshPicker, but the async strip refresh leaves a
   // brief window). Mirrors the re-check maybeConvertShortcode already does;
   // on a mismatch, no-op rather than splice blind into the wrong span.
-  const sc = emojiTokenStart >= 0 ? findActiveShortcode(value, emojiTokenEnd) : null;
+  // allowEmpty: a desktop pick from the bare-`:` frequently-used set has an
+  // empty query, so the captured span is just the `:` — still valid.
+  const sc = emojiTokenStart >= 0 ? findActiveShortcode(value, emojiTokenEnd, true) : null;
   if (!sc || sc.start !== emojiTokenStart) {
     closeEmojiStrip();
+    closeEmojiPicker();
     return;
   }
   const before = value.slice(0, sc.start);
@@ -1006,6 +1055,7 @@ function onEmojiSelect(item: EmojiMatch): void {
   text.value = before + item.emoji + after;
   cycling = false;
   closeEmojiStrip();
+  closeEmojiPicker();
   queueMicrotask(() => {
     const el = inputEl.value;
     if (!el) return;
@@ -1061,17 +1111,31 @@ function refreshPicker() {
   const cursor = el.selectionStart ?? value.length;
 
   // An in-progress `:shortcode:` owns the suggester slot — it isn't a nick
-  // token, and the emoji strip and the nick picker/strip share one slot over
-  // the StatusBar. Min length 2 keeps the strip from flashing on a lone `:x`.
-  const shortcode = findActiveShortcode(value, cursor);
-  if (shortcode && shortcode.name.length >= 2) {
+  // token, and both emoji UIs and the nick picker/strip share one slot over the
+  // StatusBar. Desktop opens the vertical EmojiPicker (issue #348) the moment
+  // `:` is typed (empty query → a frequently-used set); mobile keeps the
+  // horizontal strip, gated at 2+ chars so a lone `:` — or an emoticon like
+  // `:)` — doesn't flash it.
+  const emojiOnStrip = isMobile.value;
+  const shortcode = findActiveShortcode(value, cursor, !emojiOnStrip);
+  if (shortcode && (!emojiOnStrip || shortcode.name.length >= 2)) {
     closePicker();
     closeStrip();
     closeChannelPicker();
-    void showEmojiStrip();
+    if (emojiOnStrip) {
+      closeEmojiPicker();
+      void showEmojiStrip();
+    } else {
+      closeEmojiStrip();
+      emojiPickerOpen.value = true;
+      emojiPickerQuery.value = shortcode.name;
+      emojiTokenStart = shortcode.start;
+      emojiTokenEnd = shortcode.end;
+    }
     return;
   }
   closeEmojiStrip();
+  closeEmojiPicker();
 
   const { token, start, end } = tokenAtCursor(value, cursor);
 
@@ -1259,6 +1323,7 @@ function toggleHistory(): void {
   closeStrip();
   closeChannelPicker();
   closeEmojiStrip();
+  closeEmojiPicker();
   closeColorPicker();
   historyPickerOpen.value = true;
 }
@@ -1345,6 +1410,7 @@ watch(active, (newActive, oldActive) => {
   closeStrip();
   closeChannelPicker();
   closeEmojiStrip();
+  closeEmojiPicker();
   closeColorPicker();
   closeHistoryPicker();
   resetHistoryNav();
@@ -1395,6 +1461,7 @@ onBeforeUnmount(() => {
   // next instance (e.g. switching to system console and back).
   closeStrip();
   closeEmojiStrip();
+  closeEmojiPicker();
   closeColorPicker();
 });
 
@@ -1545,6 +1612,7 @@ async function submit() {
   closeStrip();
   closeChannelPicker();
   closeEmojiStrip();
+  closeEmojiPicker();
   closeColorPicker();
   closeHistoryPicker();
   const raw = text.value;

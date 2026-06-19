@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Brad Root
 // SPDX-License-Identifier: MPL-2.0
 
+import type { EmojiMatch } from './emojiData.js';
+
 // Slack-style `:shortcode:` emoji entry — the pure parsing + ranking helpers.
 // These never carry the emoji table itself, so MessageInput can import them
 // eagerly while the ~1,900-entry map in `emojiData.ts` stays a lazily-loaded
@@ -16,10 +18,18 @@
 // shortcode start. ASCII smileys fall out for free: `:-)` never closes at the
 // caret because `)` isn't a shortcode character.
 
-const NAME = '[a-z0-9_+-]+';
-// `(?<![a-z0-9_+-])` keeps the opening colon off the back of a word or number.
-const OPEN_RE = new RegExp(`(?<![a-z0-9_+-]):(${NAME})$`, 'i');
-const CLOSE_RE = new RegExp(`(?<![a-z0-9_+-]):(${NAME}):$`, 'i');
+// The gemoji shortcode character set (`:+1:`, `:e-mail:`, `:thumbsup:`). Defined
+// once so the body patterns and every opening-boundary lookbehind below can't
+// drift apart.
+const NAME_CHARS = '[a-z0-9_+-]';
+const NAME = `${NAME_CHARS}+`;
+// `(?<!${NAME_CHARS})` keeps the opening colon off the back of a word or number.
+const OPEN_RE = new RegExp(`(?<!${NAME_CHARS}):(${NAME})$`, 'i');
+const CLOSE_RE = new RegExp(`(?<!${NAME_CHARS}):(${NAME}):$`, 'i');
+// Like OPEN_RE but the body may be empty — matches a bare `:` just opened (the
+// desktop emoji picker uses this to pop a frequently-used set before any query
+// is typed). Same opening-boundary rule, so `word:` / `12:` still don't match.
+const OPEN_EMPTY_RE = new RegExp(`(?<!${NAME_CHARS}):(${NAME_CHARS}*)$`, 'i');
 
 // A *global* matcher for every completed `:name:` in a string, used by the
 // render-time emoji pass (`splitTextByEmoji` in nickColor). It shares NAME and
@@ -29,7 +39,7 @@ const CLOSE_RE = new RegExp(`(?<![a-z0-9_+-]):(${NAME}):$`, 'i');
 // fresh instance is returned per call because a global regex carries mutable
 // `lastIndex`.
 export function shortcodeScanRegex(): RegExp {
-  return new RegExp(`(?<![a-z0-9_+-]):(${NAME}):`, 'gi');
+  return new RegExp(`(?<!${NAME_CHARS}):(${NAME}):`, 'gi');
 }
 
 export interface ShortcodeToken {
@@ -44,8 +54,12 @@ export interface ShortcodeToken {
 // An *in-progress* shortcode ending at the caret: `:bo|` → { name: 'bo' }.
 // Returns null when the caret isn't sitting in a shortcode body. Drives the
 // suggester strip; the caller decides the minimum query length to act on.
-export function findActiveShortcode(text: string, caret: number): ShortcodeToken | null {
-  const m = OPEN_RE.exec(text.slice(0, caret));
+export function findActiveShortcode(
+  text: string,
+  caret: number,
+  allowEmpty = false,
+): ShortcodeToken | null {
+  const m = (allowEmpty ? OPEN_EMPTY_RE : OPEN_RE).exec(text.slice(0, caret));
   if (!m) return null;
   return { name: m[1].toLowerCase(), start: caret - m[1].length - 1, end: caret };
 }
@@ -93,6 +107,9 @@ let emojiModule: Promise<typeof import('./emojiData.js')> | null = null;
 // Stays null until the chunk lands; the render pass treats that as "no emoji
 // yet" and shows the literal `:name:` until a reload re-runs the split.
 let loadedTable: Record<string, string> | null = null;
+// The table's shortcode keys, cached once so the synchronous picker search
+// (`searchEmojiSync`) doesn't re-key the ~1,900-entry map on every keystroke.
+let loadedNames: string[] = [];
 // One-shot listeners fired when the table first becomes available, whichever
 // caller triggered the load. Lets the render layer (useEmoji) recover even if
 // its own preload failed: a later successful load from anywhere — the
@@ -111,6 +128,7 @@ export function loadEmoji(): Promise<typeof import('./emojiData.js')> {
     emojiModule
       .then((mod) => {
         loadedTable = mod.EMOJI;
+        loadedNames = Object.keys(mod.EMOJI);
         notifyEmojiLoaded();
         return mod;
       })
@@ -139,4 +157,52 @@ export function onEmojiLoaded(cb: () => void): void {
 // `emojiForShortcode` in emojiData.ts.
 export function emojiGlyph(name: string): string | null {
   return loadedTable?.[name.toLowerCase()] ?? null;
+}
+
+// Synchronous ranked search for the desktop emoji picker — mirrors emojiData's
+// `searchEmoji` but reads the cached table so it can run inside a Vue computed
+// (no await). Returns [] until the chunk has loaded; the picker gates on
+// emoji-readiness and recomputes when it lands.
+export function searchEmojiSync(query: string, limit = 30): EmojiMatch[] {
+  if (!loadedTable) return [];
+  const table = loadedTable;
+  return rankShortcodes(loadedNames, query)
+    .slice(0, limit)
+    .map((name) => ({ name, emoji: table[name] }));
+}
+
+// A small static "frequently used" set shown when the picker opens on a bare
+// `:` (no query yet). Deliberately not usage-tracked — a fixed common set keeps
+// it simple; frecency can come later. Only entries present in the loaded table
+// are returned, so a future gemoji revision can't surface a dangling shortcode.
+const FREQUENT_SHORTCODES = [
+  'joy',
+  'sob',
+  'heart',
+  'smile',
+  '+1',
+  'pray',
+  'fire',
+  'tada',
+  'rofl',
+  'sweat_smile',
+  'heart_eyes',
+  'thinking',
+  'eyes',
+  'pleading_face',
+  'ok_hand',
+  'raised_hands',
+  'sparkles',
+  'wave',
+  '100',
+  'clap',
+  'rocket',
+  'thumbsdown',
+];
+export function frequentEmoji(limit = 30): EmojiMatch[] {
+  if (!loadedTable) return [];
+  const table = loadedTable;
+  return FREQUENT_SHORTCODES.filter((name) => table[name] != null)
+    .slice(0, limit)
+    .map((name) => ({ name, emoji: table[name] }));
 }
