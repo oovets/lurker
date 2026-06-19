@@ -71,7 +71,7 @@ let scopedSnapshot: typeof store.$state | null = null;
 const listEl = ref<HTMLUListElement | null>(null);
 
 const visibleItems = computed(() =>
-  store.items.filter((m) => !ignores.isIgnored(m.networkId, m.nick, m.userhost ?? '')),
+  store.items.filter((m) => !ignores.isMessageHidden(m.networkId, m)),
 );
 
 const hasFilter = computed(() => store.query.trim().length > 0);

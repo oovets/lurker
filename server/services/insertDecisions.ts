@@ -8,6 +8,7 @@
 
 import { matchEvent, type CompiledRule } from './highlightEngine.js';
 import { evaluateIgnores, type CompiledIgnoreRule } from './ignoreMatch.js';
+import { COUNTABLE_TYPES } from '../db/messages.js';
 
 type CompiledIgnore = CompiledIgnoreRule[];
 
@@ -36,8 +37,12 @@ export function decideStamp(
   if (matched) matchedRuleId = ruleId;
 
   let fromIgnored = false;
-  // Self messages can't be ignored; nick-less system rows have no sender.
-  if (ignoreCompiled.length && event.nick && !event.self) {
+  // from_ignored only feeds the countable-type queries (unread/highlight counts,
+  // search) — and hiding of joins/parts/etc. is done client-side via the live
+  // evaluate(), not from this stamp. So only evaluate ignores for the chat types
+  // that actually read the column; this keeps high-churn JOIN/PART/QUIT/NICK off
+  // the per-event ignore path entirely. Self/nick-less rows have no sender.
+  if (ignoreCompiled.length && event.nick && !event.self && COUNTABLE_TYPES.has(event.type)) {
     const verdict = evaluateIgnores(
       ignoreCompiled,
       {

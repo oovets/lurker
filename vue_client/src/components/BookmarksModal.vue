@@ -43,7 +43,7 @@ const store = useBookmarksStore();
 const ignores = useIgnoresStore();
 
 const visibleItems = computed(() =>
-  store.items.filter((m) => !ignores.isIgnored(m.networkId, m.nick, m.userhost ?? '')),
+  store.items.filter((m) => !ignores.isMessageHidden(m.networkId, m)),
 );
 
 onMounted(() => {

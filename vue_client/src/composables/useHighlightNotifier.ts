@@ -28,6 +28,7 @@ export interface NotifyEvent {
   userhost?: string;
   target?: string;
   text?: string;
+  type?: string;
   id?: number;
 }
 
@@ -114,16 +115,22 @@ export function notifyForEvent(event: NotifyEvent | null | undefined): void {
   // buffer is already in plain view. See shouldNotifyInApp.
   if (!shouldNotifyInApp(event)) return;
 
-  // Ignored sender → no toast, no sound. Push is gated server-side in
-  // wsHub.maybePush since push fires while no client is open and a
-  // client-side filter can't intercept it.
+  // Ignored sender → no toast, no sound. Full-context evaluate so a scoped rule
+  // (/ignore x PUBLIC, a #chan or -pattern rule) suppresses the toast for a
+  // message it also hides, and a NOHIGHLIGHT rule suppresses the highlight
+  // toast/sound while leaving the message visible. Push is gated server-side in
+  // wsHub.maybePush (push fires while no client is open).
   const ignores = useIgnoresStore();
-  if (
-    event.nick &&
-    event.networkId &&
-    ignores.isIgnored(event.networkId, event.nick, event.userhost ?? '')
-  ) {
-    return;
+  if (event.nick && event.networkId && event.target) {
+    const verdict = ignores.evaluate(event.networkId, {
+      nick: event.nick,
+      userhost: event.userhost ?? null,
+      target: event.target,
+      text: event.text ?? '',
+      type: event.type ?? 'message',
+      isDm: !!event.dm,
+    });
+    if (verdict.hide || verdict.nohilight) return;
   }
 
   const settings = useSettingsStore();

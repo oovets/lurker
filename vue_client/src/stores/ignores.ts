@@ -70,12 +70,44 @@ export const useIgnoresStore = defineStore('ignores', {
         return evaluateIgnores(compiledFor(list), ctx).hide;
       },
 
+    // Full-context "is this message hidden?" for surfaces that hold the message
+    // object (search/highlights/bookmarks results). Unlike isIgnored it honors
+    // level/channel/pattern rules, so a /ignore x PUBLIC or -pattern rule keeps
+    // those messages out of search. Result rows carry the body as `body` and
+    // omit `type` (they're always chat), so default type to 'message' — which
+    // still resolves PUBLIC/MSGS/channel/pattern correctly.
+    isMessageHidden:
+      (state) =>
+      (
+        networkId: number | string,
+        m: {
+          nick?: string | null;
+          userhost?: string | null;
+          target: string;
+          type?: string;
+          text?: string | null;
+          body?: string | null;
+        },
+      ): boolean => {
+        if (!m.nick) return false;
+        const list = state.byNetwork[networkId] || state.byNetwork[Number(networkId)] || [];
+        if (list.length === 0) return false;
+        return evaluateIgnores(compiledFor(list), {
+          nick: m.nick,
+          userhost: m.userhost ?? null,
+          target: m.target,
+          text: m.text ?? m.body ?? '',
+          type: m.type ?? 'message',
+          isDm: !m.target.startsWith('#') && !m.target.startsWith(':server:'),
+        }).hide;
+      },
+
     // "Is this sender broadly ignored?" — a non-except, no-pattern, ALL-level
     // rule that hides them regardless of content (no channel scope, so applies
-    // everywhere). For nick-only callers (autocomplete, search/highlight result
-    // filtering, status bar, the toast notifier). A NOHIGHLIGHT, content-pattern,
+    // everywhere). For nick-only callers that have no message context
+    // (autocomplete, the typing indicator). A NOHIGHLIGHT, content-pattern,
     // single-level, or channel-scoped rule deliberately does NOT count here —
-    // those need full event context (use evaluate/isHidden).
+    // those need full event context (use isMessageHidden / isHidden).
     isIgnored:
       (state) =>
       (networkId: number | string, nick: string, userhost: string): boolean => {

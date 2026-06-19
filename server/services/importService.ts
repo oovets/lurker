@@ -32,6 +32,8 @@ import db from '../db/index.js';
 import { EXPORT_TABLES, EXPORT_FORMAT_VERSION, IMPORT_ORDER } from '../db/exportSchema.js';
 import { ENCRYPTED_NETWORK_COLUMNS } from '../db/networks.js';
 import { encryptSecret } from '../utils/secretCrypto.js';
+import ignoreRulesService from './ignoreRulesService.js';
+import type { IgnorePatternKind } from '../db/ignoredMasks.js';
 
 // Messages inserted per transaction before yielding to the event loop. Big
 // enough that per-tx overhead is negligible, small enough that the loop never
@@ -202,16 +204,6 @@ function insertTable(
       }
     }
 
-    // ignored_masks gained levels/pattern/channels in #301; pre-overhaul
-    // archives carry only mask/created_at. mask is now nullable, but
-    // pattern_kind and levels are NOT NULL, so default a missing key the way the
-    // migration backfilled legacy rows (an ALL-level, substring rule).
-    if (table === 'ignored_masks') {
-      if (row.pattern_kind === undefined) row.pattern_kind = 'substr';
-      if (row.levels === undefined) row.levels = 'ALL';
-      if (row.is_except === undefined) row.is_except = 0;
-    }
-
     // If any required FK ended up undefined (referenced row wasn't in the
     // export), drop the row.
     let drop = false;
@@ -224,6 +216,28 @@ function insertTable(
       }
     }
     if (drop) continue;
+
+    // Route ignore rules through the service rather than a raw INSERT, so a
+    // crafted/legacy archive can't plant an unvalidated regex (ReDoS surface), a
+    // non-ISO expires_at that never lapses and never sweeps, or a duplicate —
+    // the service runs the same validation/normalization/dedupe as live /ignore.
+    // Pre-overhaul archives carry only mask/created_at; the defaults below
+    // reproduce the migration's "ALL-level substring rule".
+    if (table === 'ignored_masks') {
+      const csv = (v: unknown): string[] | null =>
+        typeof v === 'string' && v ? v.split(',').filter(Boolean) : null;
+      const result = ignoreRulesService.add(row.user_id as number, row.network_id as number, {
+        mask: typeof row.mask === 'string' ? row.mask : null,
+        channels: csv(row.channels),
+        pattern: typeof row.pattern === 'string' ? row.pattern : null,
+        patternKind: ((row.pattern_kind as IgnorePatternKind) || 'substr') as IgnorePatternKind,
+        levels: csv(row.levels) ?? ['ALL'],
+        isExcept: row.is_except === 1 || row.is_except === true,
+        expiresAt: typeof row.expires_at === 'string' ? row.expires_at : null,
+      });
+      if (result.ok) inserted += 1;
+      continue;
+    }
 
     const result = insertOne(stmt, cols, row);
 

@@ -53,13 +53,21 @@ const DURATION_MULT: Record<string, number> = {
   weeks: 604_800_000,
 };
 
+// Cap durations at ~100 years. Beyond this `now + ms` overflows the valid Date
+// range and `new Date(...).toISOString()` throws RangeError; an absurd value is
+// almost always a typo, so reject it (treat as a parse error) rather than
+// silently capping. A truly permanent ignore is just `-time` omitted.
+const MAX_DURATION_MS = 100 * 365 * 24 * 60 * 60 * 1000;
+
 function parseDuration(s: string | undefined): number | null {
   if (!s) return null;
   const m = DURATION_RE.exec(s.trim());
   if (!m) return null;
   const mult = DURATION_MULT[(m[2] || 's').toLowerCase()];
   if (mult == null) return null;
-  return parseInt(m[1], 10) * mult;
+  const ms = parseInt(m[1], 10) * mult;
+  if (!Number.isFinite(ms) || ms > MAX_DURATION_MS) return null;
+  return ms;
 }
 
 // Tokenize on whitespace, but keep a "(…)" group (balanced) or a "quoted" string

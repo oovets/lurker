@@ -119,12 +119,14 @@ describe('PUBLIC hide', () => {
   });
 });
 
-describe('JOINS hide — no count regression', () => {
-  it('stamps the join hidden but unread is unaffected (joins never counted)', () => {
+describe('JOINS hide — non-countable events are not server-stamped', () => {
+  it('does not stamp from_ignored on a join (client hides it; no count to feed)', () => {
     expect(addRule('joiner', ['JOINS']).ok).toBe(true);
     const before = countNewer(net!.id, '#nh', 0);
     const decided = stamp({ type: 'join', nick: 'joiner', target: '#nh', text: '' });
-    expect(decided.fromIgnored).toBe(true);
+    // Joins aren't a COUNTABLE_TYPE, so decideStamp skips ignore evaluation
+    // entirely — the row stays from_ignored=0 and the client filters it live.
+    expect(decided.fromIgnored).toBe(false);
     insert('#nh', decided, { type: 'join', nick: 'joiner', text: '' });
     expect(countNewer(net!.id, '#nh', 0)).toBe(before);
   });

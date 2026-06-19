@@ -87,6 +87,10 @@ describe('parseIgnoreArgs — flags & errors', () => {
     expect(p('-time 300 mike').expiresAt).toBe('2026-06-18T00:05:00.000Z');
   });
 
+  it('rejects an absurd -time instead of overflowing Date (no RangeError)', () => {
+    expect(p('-time 99999999999999999999 bob').error).toMatch(/time/);
+  });
+
   it('rejects -replies as unsupported', () => {
     expect(p('-replies *!*@*.irssi.org ALL').error).toMatch(/replies/);
   });
