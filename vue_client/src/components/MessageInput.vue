@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue';
+import { ref, computed, watch, onBeforeUnmount, onMounted, nextTick } from 'vue';
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import { useAuthStore } from '../stores/auth.js';
@@ -135,6 +135,8 @@ import { useToastsStore } from '../stores/toasts.js';
 import { useIgnoresStore, type IgnoreEntry } from '../stores/ignores.js';
 import { parseIgnoreArgs } from '../../../shared/parseIgnore.js';
 import { useWhoisStore } from '../stores/whois.js';
+import { useChanlistStore } from '../stores/chanlist.js';
+import { useChannelListModal } from '../composables/useChannelListModal.js';
 import { socketSend, socketSendWithAck } from '../composables/useSocket.js';
 import { requestScrollToBottom } from '../composables/useScrollState.js';
 import { setComposingState } from '../composables/useComposing.js';
@@ -181,6 +183,8 @@ const settings = useSettingsStore();
 const uploads = useUploadsStore();
 const toasts = useToastsStore();
 const ignores = useIgnoresStore();
+const chanlist = useChanlistStore();
+const channelListModal = useChannelListModal();
 const nickColors = useNickColors();
 
 // The ignore rules visible from this network, in /ignore-listing order: globals
@@ -261,6 +265,32 @@ const text = computed({
     onInput();
   },
 });
+// Firefox (desktop + mobile) doesn't support CSS `field-sizing: content` (#336),
+// so the native content-driven grow leaves the composer stuck at rows="1". Fall
+// back to a JS measure-and-set there; Chrome/Safari keep the native single-pass
+// path untouched (autosize() no-ops when field-sizing is supported).
+const supportsFieldSizing =
+  typeof CSS !== 'undefined' &&
+  typeof CSS.supports === 'function' &&
+  CSS.supports('field-sizing', 'content');
+
+function autosizeInput(): void {
+  if (supportsFieldSizing) return;
+  const el = inputEl.value;
+  if (!el) return;
+  // Reset, then lock to the content height — done synchronously so the browser
+  // never paints the transient one-row state. CSS max-height + overflow-y:auto
+  // cap growth at 16 rows and scroll beyond it.
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+// Re-measure whenever the visible text changes — typing (the v-model setter),
+// programmatic edits (history recall, send-clear), and buffer switches that swap
+// in a different draft (the getter changes without firing the setter).
+watch(text, () => nextTick(autosizeInput));
+onMounted(() => nextTick(autosizeInput));
+
 const buffer = computed(() =>
   active.value ? buffers.byKey(`${active.value.networkId}::${active.value.target}`) : null,
 );
@@ -2071,11 +2101,16 @@ function handleCommand(line: string, networkId: number, target: string): boolean
         localInfo(networkId, target, `/reconnect failed: ${err.message || 'could not reconnect'}`);
       });
       return true;
-    case 'list':
-      return sendOrToast(
-        { type: 'raw', networkId, line: argLine ? `LIST ${argLine}` : 'LIST' },
-        line,
-      );
+    case 'list': {
+      // Open the channel-list browser (the same surface as the network context
+      // menu) rather than piping a raw LIST into the buffer (#335). The modal
+      // self-fetches on open; an argument pre-seeds its filter via the chanlist
+      // store, which the modal reads as its initial query.
+      const q = argLine.trim();
+      if (q) chanlist.setQuery(networkId, q);
+      channelListModal.open(networkId);
+      return true;
+    }
     case 'ignore': {
       // No-arg form: dump the ignore rules visible here (globals + this
       // network's) into the active buffer as system messages, with an index for
