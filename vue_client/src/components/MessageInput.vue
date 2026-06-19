@@ -182,6 +182,18 @@ const uploads = useUploadsStore();
 const toasts = useToastsStore();
 const ignores = useIgnoresStore();
 const nickColors = useNickColors();
+
+// The ignore rules visible from this network, in /ignore-listing order: globals
+// first (scope null), then this network's own (scope = networkId). The index a
+// user sees in /ignore maps 1:1 to this array, so /unignore <n> resolves the
+// right rule and its scope.
+function combinedIgnores(networkId: number): { entry: IgnoreEntry; scope: number | null }[] {
+  const globals = ignores.global.map((entry) => ({ entry, scope: null as number | null }));
+  const own = ignores
+    .masksFor(networkId)
+    .map((entry) => ({ entry, scope: networkId as number | null }));
+  return [...globals, ...own];
+}
 const inputEl = ref<HTMLTextAreaElement | null>(null);
 const formEl = ref<HTMLElement | null>(null);
 const fileInputEl = ref<HTMLInputElement | null>(null);
@@ -1747,10 +1759,11 @@ function localInfo(networkId: number, target: string, lineText: string): void {
   });
 }
 
-// One indexed line for the /ignore listing: "  2. *zzz*  NICKS  #chan  [except]".
-// "*zzz*  NICKS  #chan  [except]" — the rule's dimensions, no index.
-function summarizeIgnoreEntry(entry: IgnoreEntry): string {
+// "*zzz*  [global]  NICKS  #chan  [except]" — the rule's dimensions, no index.
+// `global` tags rules that apply on every network (vs. this network's own).
+function summarizeIgnoreEntry(entry: IgnoreEntry, global = false): string {
   const parts: string[] = [entry.mask ?? '*'];
+  if (global) parts.push('[global]');
   if (entry.levels?.length) parts.push(entry.levels.join(','));
   if (entry.channels?.length) parts.push(entry.channels.join(','));
   if (entry.pattern) {
@@ -1761,9 +1774,9 @@ function summarizeIgnoreEntry(entry: IgnoreEntry): string {
   return parts.join('  ');
 }
 
-// One indexed line for the /ignore listing: "  2. *zzz*  NICKS  #chan".
-function formatIgnoreEntry(entry: IgnoreEntry, idx: number): string {
-  return `  ${idx}. ${summarizeIgnoreEntry(entry)}`;
+// One indexed line for the /ignore listing: "  2. *zzz*  [global]  NICKS  #chan".
+function formatIgnoreEntry(entry: IgnoreEntry, idx: number, global = false): string {
+  return `  ${idx}. ${summarizeIgnoreEntry(entry, global)}`;
 }
 
 const COMMANDS_LINES = [
@@ -1795,10 +1808,10 @@ const COMMANDS_LINES = [
   '  /who [mask]            — find users (also /whowas /userhost /ison /names)',
   '  /motd /version /time   — server info (also /admin /info /lusers /links /map /stats /help)',
   '  /jitsi                 — start a video call (alias: /talk)',
-  '  /ignore [opts] [mask|#chan] [LEVELS] — list, or add an ignore rule',
-  '      opts: -regexp -full -pattern <text> -except -time <dur>',
+  '  /ignore [opts] [mask|#chan] [LEVELS] — list, or add an ignore rule (global by default)',
+  '      opts: -network -regexp -full -pattern <text> -except -time <dur>',
   '      LEVELS: ALL PUBLIC MSGS NOTICES ACTIONS JOINS PARTS QUITS NICKS KICKS MODES TOPICS NOHIGHLIGHT',
-  '      e.g. /ignore bob NOHIGHLIGHT   ·   /ignore -regexp -pattern (foo|bar) #chan',
+  '      e.g. /ignore bob NOHIGHLIGHT   ·   /ignore -network -regexp -pattern (foo|bar) #chan',
   '  /unignore <index|mask> — remove an ignore (index from /ignore list)',
   '  /raw <line>            — send a raw IRC line (alias: /quote)',
   '  /commands              — this list',
@@ -2064,18 +2077,20 @@ function handleCommand(line: string, networkId: number, target: string): boolean
         line,
       );
     case 'ignore': {
-      // No-arg form: dump the current network's ignore list into the active
-      // buffer as system messages, with an index for /unignore. The store
-      // already has the list (snapshot + ignore-list-updated), so it's a purely
-      // client-side read — no server roundtrip.
+      // No-arg form: dump the ignore rules visible here (globals + this
+      // network's) into the active buffer as system messages, with an index for
+      // /unignore. The store already has the lists (snapshot +
+      // ignore-list-updated), so it's a purely client-side read.
       const args = argLine.trim();
       if (!args) {
-        const list = ignores.masksFor(networkId);
+        const list = combinedIgnores(networkId);
         if (!list.length) {
-          localInfo(networkId, target, 'ignore list is empty on this network.');
+          localInfo(networkId, target, 'ignore list is empty.');
         } else {
           localInfo(networkId, target, `ignore list (${list.length}):`);
-          list.forEach((entry, i) => localInfo(networkId, target, formatIgnoreEntry(entry, i + 1)));
+          list.forEach(({ entry, scope }, i) =>
+            localInfo(networkId, target, formatIgnoreEntry(entry, i + 1, scope === null)),
+          );
         }
         return true;
       }
@@ -2084,7 +2099,8 @@ function handleCommand(line: string, networkId: number, target: string): boolean
         localInfo(networkId, target, `/ignore: ${parsed.error}`);
         return true;
       }
-      ignores.addRule(networkId, parsed);
+      // Default scope is global (null); -network scopes to the current network.
+      ignores.addRule(parsed.scopeNetwork ? networkId : null, parsed);
       return true;
     }
     case 'unignore': {
@@ -2093,26 +2109,28 @@ function handleCommand(line: string, networkId: number, target: string): boolean
         localInfo(networkId, target, 'usage: /unignore <index|mask>  (index from /ignore)');
         return true;
       }
+      const list = combinedIgnores(networkId);
       if (/^\d+$/.test(arg)) {
-        const entry = ignores.masksFor(networkId)[Number(arg) - 1];
-        if (!entry) {
-          localInfo(
-            networkId,
-            target,
-            `/unignore: no ignore #${arg} on this network (see /ignore)`,
-          );
+        const item = list[Number(arg) - 1];
+        if (!item) {
+          localInfo(networkId, target, `/unignore: no ignore #${arg} (see /ignore)`);
           return true;
         }
-        ignores.removeRule(networkId, { id: entry.id });
-        localInfo(networkId, target, `removed ignore #${arg}: ${summarizeIgnoreEntry(entry)}`);
+        ignores.removeRule(item.scope, { id: item.entry.id });
+        localInfo(
+          networkId,
+          target,
+          `removed ignore #${arg}: ${summarizeIgnoreEntry(item.entry, item.scope === null)}`,
+        );
         return true;
       }
-      // Remove-by-mask matches the stored mask exactly (case-insensitive), the
-      // same rule the server applies — count local matches so we can confirm or
-      // report nothing-removed instead of failing silently.
-      const matches = ignores
-        .masksFor(networkId)
-        .filter((e) => (e.mask ?? '').toLowerCase() === arg.toLowerCase());
+      // Remove-by-mask matches the stored mask exactly (case-insensitive) across
+      // the visible scope (globals + this network) — the same set the server
+      // deletes. Count local matches so we confirm or report nothing-removed
+      // instead of failing silently.
+      const matches = list.filter(
+        ({ entry }) => (entry.mask ?? '').toLowerCase() === arg.toLowerCase(),
+      );
       if (!matches.length) {
         localInfo(networkId, target, `/unignore: no ignore with mask "${arg}" (see /ignore)`);
         return true;

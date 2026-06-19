@@ -482,6 +482,20 @@ export function fanOutToUser(userId: number, payload: WsPayload, opts: FanOutOpt
   fanOut(userId, payload, opts);
 }
 
+// Push the user's current ignore list for one scope to all their open tabs.
+// networkId null targets the global bucket; a number targets that network's own
+// rules. The client replaces the matching bucket and re-unions at match time.
+export function fanOutIgnoreList(userId: number, networkId: number | null): void {
+  fanOut(userId, {
+    kind: 'ignore-list-updated',
+    networkId,
+    masks:
+      networkId == null
+        ? ircManager.listGlobalIgnoresFor(userId)
+        : ircManager.listIgnoredFor(userId, networkId),
+  });
+}
+
 // One sweep of the liveness heartbeat over a batch of sockets. A socket that
 // hasn't ponged since the previous sweep (isAlive still false) is terminated —
 // firing its 'close' handler → removeSocket → evaluatePresence, which lets
@@ -1031,7 +1045,13 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
     freshNetworkId: number | null = null,
   ): void {
     const networks = ircManager.snapshotForUser(userId);
-    send(ws, { kind: 'snapshot', networks });
+    // Global ignore rules (network_id NULL) aren't tied to any one network blob,
+    // so they ride alongside the per-network snapshot as their own field (#350).
+    send(ws, {
+      kind: 'snapshot',
+      networks,
+      globalIgnores: ircManager.listGlobalIgnoresFor(userId),
+    });
     // Drafts ship once per snapshot, separate from per-buffer backlog frames —
     // the keying is global to the user, not per-buffer, so a single message is
     // cheaper than fanning a body field into every backlog row.
@@ -1665,8 +1685,11 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         break;
       }
       case 'add-ignore': {
-        const networkId = Number(msg.networkId);
-        if (!networkId) break;
+        // null networkId = a global rule (every network); a positive number
+        // scopes it to one. `null` is a valid scope, so distinguish it from a
+        // malformed/missing id rather than the old truthiness check.
+        const networkId = msg.networkId == null ? null : Number(msg.networkId);
+        if (networkId !== null && !(networkId > 0)) break;
         // New clients send a full `rule` object; the quick-ignore modal and
         // older clients send a bare `mask` string (an ALL-level rule).
         const input =
@@ -1681,25 +1704,25 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         // compiled cache so the insert path sees the new rule immediately.
         const result = ircManager.addIgnore(userId, networkId, input);
         if (!result.ok) break;
-        fanOut(userId, {
-          kind: 'ignore-list-updated',
-          networkId,
-          masks: ircManager.listIgnoredFor(userId, networkId),
-        });
+        fanOutIgnoreList(userId, networkId);
         break;
       }
       case 'remove-ignore': {
-        const networkId = Number(msg.networkId);
-        if (!networkId) break;
+        const networkId = msg.networkId == null ? null : Number(msg.networkId);
+        if (networkId !== null && !(networkId > 0)) break;
         const id = typeof msg.id === 'number' ? msg.id : undefined;
         const mask = typeof msg.mask === 'string' && msg.mask.trim() ? msg.mask.trim() : undefined;
         if (id === undefined && mask === undefined) break;
         ircManager.removeIgnore(userId, networkId, { id, mask });
-        fanOut(userId, {
-          kind: 'ignore-list-updated',
-          networkId,
-          masks: ircManager.listIgnoredFor(userId, networkId),
-        });
+        // A by-mask delete on a network scope clears matching globals AND that
+        // network's rules (removeByMask spans both), so refresh both buckets.
+        // by-id, or a global-scoped delete, touches just one.
+        if (mask !== undefined && networkId !== null) {
+          fanOutIgnoreList(userId, null);
+          fanOutIgnoreList(userId, networkId);
+        } else {
+          fanOutIgnoreList(userId, networkId);
+        }
         break;
       }
       case 'history': {

@@ -22,6 +22,10 @@ export interface ParsedIgnore {
   levels: string[];
   isExcept: boolean;
   expiresAt: string | null;
+  // true = scope the rule to the current network (-network); false (default) =
+  // global, applying on every network (#350). Consumed by the command handler,
+  // which maps it to a networkId; the rule payload itself is scope-agnostic.
+  scopeNetwork: boolean;
   error?: string;
 }
 
@@ -68,6 +72,15 @@ function parseDuration(s: string | undefined): number | null {
   const ms = parseInt(m[1], 10) * mult;
   if (!Number.isFinite(ms) || ms > MAX_DURATION_MS) return null;
   return ms;
+}
+
+// Turn a duration string (e.g. "7 days", "30m") into an ISO expiry timestamp,
+// or null if it doesn't parse. Same grammar as the -time flag, exported so the
+// settings pane computes expiry identically to the command line.
+export function durationToExpiry(s: string, now: number = Date.now()): string | null {
+  const ms = parseDuration(s);
+  if (ms == null) return null;
+  return new Date(now + ms).toISOString();
 }
 
 // Tokenize on whitespace, but keep a "(…)" group (balanced) or a "quoted" string
@@ -121,6 +134,7 @@ export function parseIgnoreArgs(argLine: string, now: number = Date.now()): Pars
     levels: [],
     isExcept: false,
     expiresAt: null,
+    scopeNetwork: false,
   };
   const fail = (error: string): ParsedIgnore => ({ ...base, error });
 
@@ -146,6 +160,16 @@ export function parseIgnoreArgs(argLine: string, now: number = Date.now()): Pars
     }
     if (lower === '-except') {
       base.isExcept = true;
+      continue;
+    }
+    // Scope flags (#350). Default is global; -network/-net scopes to the current
+    // network, -global is the explicit opposite (a no-op but symmetric/discoverable).
+    if (lower === '-network' || lower === '-net') {
+      base.scopeNetwork = true;
+      continue;
+    }
+    if (lower === '-global') {
+      base.scopeNetwork = false;
       continue;
     }
     if (lower === '-replies') return fail('-replies is not supported');

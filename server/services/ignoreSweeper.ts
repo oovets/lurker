@@ -7,27 +7,21 @@
 // to drop it from the list so it doesn't linger in /ignore or the settings pane.
 
 import ignoreRulesService from './ignoreRulesService.js';
-import ircManager from './ircManager.js';
-import { fanOutToUser } from './wsHub.js';
+import { fanOutIgnoreList } from './wsHub.js';
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
 
 export function sweepExpiredIgnores(): void {
-  let affected: { userId: number; networkId: number }[];
+  let affected: { userId: number; networkId: number | null }[];
   try {
     affected = ignoreRulesService.sweepExpired();
   } catch (e) {
     console.warn('[ignore] expiry sweep failed:', (e as Error)?.message || e);
     return;
   }
-  for (const { userId, networkId } of affected) {
-    fanOutToUser(userId, {
-      kind: 'ignore-list-updated',
-      networkId,
-      masks: ircManager.listIgnoredFor(userId, networkId),
-    });
-  }
+  // networkId null = a global rule lapsed; fanOutIgnoreList ships the right bucket.
+  for (const { userId, networkId } of affected) fanOutIgnoreList(userId, networkId);
 }
 
 export function startIgnoreSweeper(): void {

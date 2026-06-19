@@ -6,6 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { IgnoreRuleInput } from '../db/ignoredMasks.js';
+import { evaluateIgnores, type IgnoreInput } from '../../shared/ignoreMatch.js';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lurker-test-igsvc-'));
 process.env.DATABASE_PATH = path.join(tmpDir, 'test.db');
@@ -61,5 +62,58 @@ describe('ignoreRulesService.add validation', () => {
 
   it('rejects a rule with no valid levels', () => {
     expect(svc.add(user.id, net!.id, base({ levels: ['bogus'] }))).toMatchObject({ ok: false });
+  });
+});
+
+describe('ignoreRulesService scoping + cache (#350)', () => {
+  const ctxFor = (nick: string): IgnoreInput => ({
+    nick,
+    userhost: null,
+    target: '#x',
+    text: '',
+    type: 'message',
+    isDm: false,
+  });
+
+  it('a global rule applies on every network and invalidates already-compiled caches', () => {
+    const u = createUser('igsvc-glob');
+    const n1 = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    const n2 = createNetwork(u.id, { name: 'b', host: 'h2', port: 6697, tls: true, nick: 'g' })!;
+    const ctx = ctxFor('globe');
+    // Warm n1's cache before the rule exists — proves the global add busts it.
+    expect(evaluateIgnores(svc.getCompiled(u.id, n1.id), ctx).hide).toBe(false);
+
+    expect(svc.add(u.id, null, base({ mask: 'globe' })).ok).toBe(true);
+
+    expect(evaluateIgnores(svc.getCompiled(u.id, n1.id), ctx).hide).toBe(true);
+    expect(evaluateIgnores(svc.getCompiled(u.id, n2.id), ctx).hide).toBe(true);
+  });
+
+  it('a network-scoped rule applies only on that network', () => {
+    const u = createUser('igsvc-net');
+    const n1 = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    const n2 = createNetwork(u.id, { name: 'b', host: 'h2', port: 6697, tls: true, nick: 'g' })!;
+    const ctx = ctxFor('localonly');
+    expect(svc.add(u.id, n1.id, base({ mask: 'localonly' })).ok).toBe(true);
+    expect(evaluateIgnores(svc.getCompiled(u.id, n1.id), ctx).hide).toBe(true);
+    expect(evaluateIgnores(svc.getCompiled(u.id, n2.id), ctx).hide).toBe(false);
+  });
+
+  it('listGlobal returns only the global rules', () => {
+    const u = createUser('igsvc-listglobal');
+    const n = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    svc.add(u.id, null, base({ mask: 'g1' }));
+    svc.add(u.id, n.id, base({ mask: 'netonly' }));
+    expect(svc.listGlobal(u.id).map((r) => r.mask)).toEqual(['g1']);
+  });
+
+  it('removeByMask at a network scope clears the global and that network’s match', () => {
+    const u = createUser('igsvc-rmmask');
+    const n = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    svc.add(u.id, null, base({ mask: 'dup' }));
+    svc.add(u.id, n.id, base({ mask: 'dup' }));
+    expect(svc.removeByMask(u.id, n.id, 'dup')).toBe(2);
+    expect(svc.listGlobal(u.id)).toHaveLength(0);
+    expect(svc.list(u.id, n.id)).toHaveLength(0);
   });
 });

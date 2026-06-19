@@ -113,8 +113,8 @@ describe('removeRuleById / removeRuleByMask', () => {
       networkId: net1!.id,
       rule: rule({ mask: 'byid' }),
     });
-    expect(mod.removeRuleById({ userId: user.id, networkId: net1!.id, id })).toBe(true);
-    expect(mod.removeRuleById({ userId: user.id, networkId: net1!.id, id })).toBe(false);
+    expect(mod.removeRuleById({ userId: user.id, id })).toBe(true);
+    expect(mod.removeRuleById({ userId: user.id, id })).toBe(false);
   });
 
   it('removes every rule matching a mask (case-insensitive, possibly multiple)', () => {
@@ -193,5 +193,60 @@ describe('sweepExpired', () => {
       .map((r) => r.mask)
       .toSorted();
     expect(remaining).toEqual(['stays', 'timed']);
+  });
+});
+
+describe('global scope (network_id NULL, #350)', () => {
+  it('a global rule lands in listGlobalRules, not a network listRules', () => {
+    const u = createUser('ig-glob1');
+    const n = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    mod.addRule({ userId: u.id, networkId: null, rule: rule({ mask: 'globaltroll' }) });
+    expect(mod.listGlobalRules(u.id).map((r) => r.mask)).toEqual(['globaltroll']);
+    expect(mod.listRules({ userId: u.id, networkId: n.id })).toHaveLength(0);
+  });
+
+  it('listScopedRules unions globals with the network’s own rules', () => {
+    const u = createUser('ig-glob2');
+    const n = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    mod.addRule({ userId: u.id, networkId: null, rule: rule({ mask: 'everywhere' }) });
+    mod.addRule({ userId: u.id, networkId: n.id, rule: rule({ mask: 'hereonly' }) });
+    expect(
+      mod
+        .listScopedRules({ userId: u.id, networkId: n.id })
+        .map((r) => r.mask)
+        .toSorted(),
+    ).toEqual(['everywhere', 'hereonly']);
+  });
+
+  it('the same rule is distinct at global vs network scope (dedupe is scope-aware)', () => {
+    const u = createUser('ig-glob3');
+    const n = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    const g = mod.addRule({ userId: u.id, networkId: null, rule: rule({ mask: 'dupe' }) });
+    const net = mod.addRule({ userId: u.id, networkId: n.id, rule: rule({ mask: 'dupe' }) });
+    expect(g.created && net.created).toBe(true);
+    expect(g.id).not.toBe(net.id);
+  });
+
+  it('listAllRulesForUser reports a global rule with networkId null', () => {
+    const u = createUser('ig-glob4');
+    mod.addRule({ userId: u.id, networkId: null, rule: rule({ mask: 'g' }) });
+    expect(mod.listAllRulesForUser(u.id)).toContainEqual(
+      expect.objectContaining({ mask: 'g', networkId: null }),
+    );
+  });
+
+  it('removeRuleByMask at a network scope clears both the global and that network’s mask', () => {
+    const u = createUser('ig-glob5');
+    const n = createNetwork(u.id, { name: 'a', host: 'h', port: 6697, tls: true, nick: 'g' })!;
+    const other = createNetwork(u.id, { name: 'b', host: 'h2', port: 6697, tls: true, nick: 'g' })!;
+    mod.addRule({ userId: u.id, networkId: null, rule: rule({ mask: 'spammer' }) });
+    mod.addRule({ userId: u.id, networkId: n.id, rule: rule({ mask: 'spammer' }) });
+    mod.addRule({ userId: u.id, networkId: other.id, rule: rule({ mask: 'spammer' }) });
+    // From network n: removes the global + n's, leaves the other network's.
+    expect(mod.removeRuleByMask({ userId: u.id, networkId: n.id, mask: 'spammer' })).toBe(2);
+    expect(mod.listRules({ userId: u.id, networkId: other.id }).map((r) => r.mask)).toEqual([
+      'spammer',
+    ]);
+    expect(mod.listGlobalRules(u.id)).toHaveLength(0);
   });
 });

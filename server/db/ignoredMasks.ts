@@ -22,7 +22,8 @@ export interface IgnoreRuleRow {
 }
 
 export interface IgnoreRuleRowWithNetwork extends IgnoreRuleRow {
-  networkId: number;
+  // null = a global rule (applies on every network); a number scopes it to one.
+  networkId: number | null;
 }
 
 /** Fields needed to create a rule (id/createdAt are assigned by the DB). */
@@ -50,7 +51,7 @@ const addStmt = db.prepare(`
 // logical rule, not spawn a near-duplicate row (every timed add differs by ms).
 const findIdenticalStmt = db.prepare(`
   SELECT id, expires_at AS expiresAt FROM ignored_masks
-  WHERE user_id = @userId AND network_id = @networkId
+  WHERE user_id = @userId AND network_id IS @networkId
     AND IFNULL(mask, '') = IFNULL(@mask, '') COLLATE NOCASE
     AND IFNULL(channels, '') = IFNULL(@channels, '')
     AND IFNULL(pattern, '') = IFNULL(@pattern, '')
@@ -64,14 +65,20 @@ const updateExpiryStmt = db.prepare(`
   UPDATE ignored_masks SET expires_at = @expiresAt WHERE id = @id
 `);
 
+// id is a globally-unique PK, so user_id alone is the ownership guard — no need
+// to also match network_id (which would have to special-case NULL for globals).
 const removeByIdStmt = db.prepare(`
   DELETE FROM ignored_masks
-  WHERE user_id = @userId AND network_id = @networkId AND id = @id
+  WHERE user_id = @userId AND id = @id
 `);
 
+// Remove every rule matching the mask within the scope the caller can see: the
+// global rules plus the current network's. @networkId NULL collapses this to
+// globals only. IS handles the NULL compare that `=` can't.
 const removeByMaskStmt = db.prepare(`
   DELETE FROM ignored_masks
-  WHERE user_id = @userId AND network_id = @networkId AND mask = @mask COLLATE NOCASE
+  WHERE user_id = @userId AND mask = @mask COLLATE NOCASE
+    AND (network_id IS NULL OR network_id IS @networkId)
 `);
 
 const COLS = `id, mask, channels, pattern, pattern_kind AS patternKind, levels,
@@ -81,6 +88,23 @@ const listForNetworkStmt = db.prepare(`
   SELECT ${COLS}
   FROM ignored_masks
   WHERE user_id = ? AND network_id = ?
+  ORDER BY id ASC
+`);
+
+// Global rules only (network_id NULL) — the client's global bucket.
+const listGlobalStmt = db.prepare(`
+  SELECT ${COLS}
+  FROM ignored_masks
+  WHERE user_id = ? AND network_id IS NULL
+  ORDER BY id ASC
+`);
+
+// The effective set for one network: its own rules unioned with the globals.
+// This is what the matcher compiles on the insert hot path.
+const listForScopeStmt = db.prepare(`
+  SELECT ${COLS}
+  FROM ignored_masks
+  WHERE user_id = ? AND (network_id IS NULL OR network_id = ?)
   ORDER BY id ASC
 `);
 
@@ -107,7 +131,7 @@ const deleteExpiredStmt = db.prepare(`
 
 interface RawRuleRow {
   id: number;
-  networkId?: number;
+  networkId?: number | null;
   mask: string | null;
   channels: string | null;
   pattern: string | null;
@@ -142,7 +166,7 @@ function rowToRule(row: RawRuleRow): IgnoreRuleRow {
   };
 }
 
-function toParams(userId: number, networkId: number, rule: IgnoreRuleInput) {
+function toParams(userId: number, networkId: number | null, rule: IgnoreRuleInput) {
   return {
     userId,
     networkId,
@@ -166,7 +190,7 @@ export function addRule({
   rule,
 }: {
   userId: number;
-  networkId: number;
+  networkId: number | null;
   rule: IgnoreRuleInput;
 }): { id: number; created: boolean } {
   const params = toParams(userId, networkId, rule);
@@ -183,31 +207,28 @@ export function addRule({
   return { id: Number(result.lastInsertRowid), created: true };
 }
 
-export function removeRuleById({
-  userId,
-  networkId,
-  id,
-}: {
-  userId: number;
-  networkId: number;
-  id: number;
-}): boolean {
-  return removeByIdStmt.run({ userId, networkId, id }).changes > 0;
+export function removeRuleById({ userId, id }: { userId: number; id: number }): boolean {
+  return removeByIdStmt.run({ userId, id }).changes > 0;
 }
 
-/** Remove every rule whose mask matches (case-insensitively). Returns the count. */
+/**
+ * Remove every rule whose mask matches (case-insensitively) within the visible
+ * scope: globals plus the given network (networkId null = globals only). Returns
+ * the count.
+ */
 export function removeRuleByMask({
   userId,
   networkId,
   mask,
 }: {
   userId: number;
-  networkId: number;
+  networkId: number | null;
   mask: string;
 }): number {
   return removeByMaskStmt.run({ userId, networkId, mask }).changes;
 }
 
+/** A single network's own rules (network-scoped only, excludes globals). */
 export function listRules({
   userId,
   networkId,
@@ -218,21 +239,37 @@ export function listRules({
   return (listForNetworkStmt.all(userId, networkId) as RawRuleRow[]).map(rowToRule);
 }
 
+/** The user's global rules (network_id NULL). */
+export function listGlobalRules(userId: number): IgnoreRuleRow[] {
+  return (listGlobalStmt.all(userId) as RawRuleRow[]).map(rowToRule);
+}
+
+/** Effective set for a network: globals ∪ that network's rules (matcher input). */
+export function listScopedRules({
+  userId,
+  networkId,
+}: {
+  userId: number;
+  networkId: number;
+}): IgnoreRuleRow[] {
+  return (listForScopeStmt.all(userId, networkId) as RawRuleRow[]).map(rowToRule);
+}
+
 export function listAllRulesForUser(userId: number): IgnoreRuleRowWithNetwork[] {
   return (listAllStmt.all(userId) as RawRuleRow[]).map((r) => ({
     ...rowToRule(r),
-    networkId: r.networkId!,
+    networkId: r.networkId ?? null,
   }));
 }
 
 // Delete every lapsed rule and report the (user, network) pairs touched so the
 // caller can invalidate compiled caches and fan out updated lists.
-const sweep = db.transaction((): { userId: number; networkId: number }[] => {
-  const affected = listExpiredStmt.all() as { userId: number; networkId: number }[];
+const sweep = db.transaction((): { userId: number; networkId: number | null }[] => {
+  const affected = listExpiredStmt.all() as { userId: number; networkId: number | null }[];
   if (affected.length) deleteExpiredStmt.run();
   return affected;
 });
 
-export function sweepExpired(): { userId: number; networkId: number }[] {
+export function sweepExpired(): { userId: number; networkId: number | null }[] {
   return sweep();
 }

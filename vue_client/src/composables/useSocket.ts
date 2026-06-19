@@ -311,7 +311,7 @@ function applyEvent(event: any): void {
   }
 }
 
-function applySnapshot(snapshot: any[]): void {
+function applySnapshot(snapshot: any[], globalIgnores: any[] = []): void {
   const networks = useNetworksStore();
   const buffers = useBuffersStore();
   const pins = usePinsStore();
@@ -323,7 +323,7 @@ function applySnapshot(snapshot: any[]): void {
   pins.applySnapshot(snapshot);
   nicklistCollapse.applySnapshot(snapshot);
   channelNotify.applySnapshot(snapshot);
-  ignores.applySnapshot(snapshot);
+  ignores.applySnapshot(snapshot, globalIgnores);
   nickNotes.applySnapshot(snapshot);
   for (const net of snapshot) {
     for (const ch of net.channels) {
@@ -376,7 +376,7 @@ function handleMessage(raw: string): void {
   }
 
   if (payload.kind === 'snapshot') {
-    applySnapshot(payload.networks);
+    applySnapshot(payload.networks, payload.globalIgnores || []);
     return;
   }
   if (payload.kind === 'backlog') {

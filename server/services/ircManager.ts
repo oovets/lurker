@@ -520,9 +520,11 @@ class IrcManager extends EventEmitter {
     return out;
   }
 
+  // networkId null = a global rule (applies on every network); a number scopes
+  // it to that one. The default at the command/UI layer is global (#350).
   addIgnore(
     userId: number,
-    networkId: number,
+    networkId: number | null,
     rule: IgnoreRuleInput,
   ): { ok: false; error: string } | { ok: true; id: number; created: boolean } {
     return ignoreRulesService.add(userId, networkId, rule);
@@ -530,7 +532,7 @@ class IrcManager extends EventEmitter {
 
   removeIgnore(
     userId: number,
-    networkId: number,
+    networkId: number | null,
     by: { id?: number; mask?: string },
   ): boolean | number {
     if (typeof by.id === 'number') return ignoreRulesService.removeById(userId, networkId, by.id);
@@ -538,8 +540,14 @@ class IrcManager extends EventEmitter {
     return false;
   }
 
+  /** One network's own rules (excludes globals). */
   listIgnoredFor(userId: number, networkId: number): IgnoreRuleRow[] {
     return ignoreRulesService.list(userId, networkId);
+  }
+
+  /** The user's global rules (apply on every network). */
+  listGlobalIgnoresFor(userId: number): IgnoreRuleRow[] {
+    return ignoreRulesService.listGlobal(userId);
   }
 
   setNickNote(userId: number, networkId: number, nick: string, note: string): NoteResult | null {
@@ -650,6 +658,9 @@ function ignoresGrouped(userId: number): Map<number, IgnoreRuleRow[]> {
   const out = new Map<number, IgnoreRuleRow[]>();
   for (const row of listAllRulesForUser(userId)) {
     const { networkId, ...rule } = row;
+    // Global rules (networkId null) ride a separate snapshot field, not a
+    // per-network blob — skip them here.
+    if (networkId == null) continue;
     const list = out.get(networkId);
     if (list) list.push(rule);
     else out.set(networkId, [rule]);

@@ -23,8 +23,29 @@
           >) or <code>nick!user@host</code> with <code>*</code> wildcards. The default targets this
           user's identity (<code>user@host</code>) so it survives nick changes.
         </p>
+        <div v-if="networkId" class="scope" role="radiogroup" aria-label="Scope">
+          <button
+            type="button"
+            role="radio"
+            :aria-checked="scope === 'global'"
+            :class="{ active: scope === 'global' }"
+            @click="scope = 'global'"
+          >
+            Everywhere
+          </button>
+          <button
+            type="button"
+            role="radio"
+            :aria-checked="scope === 'network'"
+            :class="{ active: scope === 'network' }"
+            @click="scope = 'network'"
+          >
+            This network
+          </button>
+        </div>
         <p class="preview">
-          Messages matching <code>{{ mask || '∅' }}</code> will be hidden on this network.
+          Messages matching <code>{{ mask || '∅' }}</code> will be hidden
+          {{ scope === 'network' ? 'on this network' : 'on every network' }}.
         </p>
       </div>
       <footer class="modal-footer">
@@ -58,6 +79,11 @@ const emit = defineEmits<{ close: [] }>();
 const ignores = useIgnoresStore();
 const inputEl = ref<HTMLInputElement | null>(null);
 
+// Scope: global (default, #350) hides the mask on every network; 'network'
+// scopes it to the buffer it was opened from. Only offered when we know the
+// network — otherwise it's always global.
+const scope = ref<'global' | 'network'>('global');
+
 // Default to a hostmask that hides the nick segment — IRCCloud convention.
 // If we don't have an observed user@host yet (member entered before WHO
 // completed and we never saw a join), fall back to nick!*@*.
@@ -65,8 +91,9 @@ const mask = ref(props.user && props.host ? `*!${props.user}@${props.host}` : `$
 
 function confirm() {
   const trimmed = mask.value.trim();
-  if (!trimmed || !props.networkId) return;
-  ignores.addMask(props.networkId, trimmed);
+  if (!trimmed) return;
+  const networkId = scope.value === 'network' ? props.networkId : null;
+  ignores.addMask(networkId, trimmed);
   emit('close');
 }
 
@@ -116,6 +143,24 @@ input:focus {
 }
 .preview {
   color: var(--fg);
+}
+.scope {
+  display: flex;
+  gap: var(--space-2);
+}
+.scope button {
+  flex: 1;
+  background: var(--bg-soft);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  cursor: pointer;
+}
+.scope button.active {
+  color: var(--fg);
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
 }
 code {
   background: var(--bg-soft);

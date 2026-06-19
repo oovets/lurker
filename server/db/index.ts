@@ -357,8 +357,10 @@ function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_user_drafts_user ON user_drafts(user_id);
 
-    -- Per-(user, network) ignore list, irssi-style (issue #301). A rule AND-s
-    -- optional dimensions: mask (NULL/'*' = anyone; a bare nick globs the nick,
+    -- Per-user ignore list, irssi-style (issue #301, scoping #350). network_id
+    -- NULL = a global rule that applies on every network (the default); a real
+    -- network_id scopes the rule to that one network. A rule AND-s optional
+    -- dimensions: mask (NULL/'*' = anyone; a bare nick globs the nick,
     -- a nick!user@host form globs the hostmask), channels (NULL = all buffers;
     -- else CSV of channel globs), pattern (NULL = any text; matched per
     -- pattern_kind 'substr'|'full'|'regex'), and levels (CSV of event-type
@@ -369,7 +371,7 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS ignored_masks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
-      network_id INTEGER NOT NULL,
+      network_id INTEGER,
       mask TEXT COLLATE NOCASE,
       channels TEXT,
       pattern TEXT,
@@ -656,7 +658,7 @@ ensureColumn('upload_history', 'removed', 'INTEGER NOT NULL DEFAULT 0');
 // Schema versioning lets us retire one-shot recovery blocks once every
 // production DB has run through them. Bump SCHEMA_VERSION when adding a new
 // recovery block, and delete blocks for versions far enough in the past.
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 const schemaVersionRow = db
   .prepare(`SELECT value FROM app_meta WHERE key = 'schema_version'`)
   .get() as { value: string } | undefined;
@@ -1009,6 +1011,61 @@ if (schemaVersion < 10) {
       `);
       db.exec(`DROP TABLE ignored_masks`);
       db.exec(`ALTER TABLE ignored_masks_new RENAME TO ignored_masks`);
+    });
+    const prevFk = db.pragma('foreign_keys', { simple: true });
+    db.pragma('foreign_keys = OFF');
+    try {
+      rebuild();
+    } finally {
+      db.pragma(`foreign_keys = ${prevFk ? 'ON' : 'OFF'}`);
+    }
+  }
+}
+
+if (schemaVersion < 11) {
+  // Issue #350: make ignore scoping global-by-default. network_id was NOT NULL
+  // (every rule tied to one network); now NULL means a global rule that applies
+  // on every network. SQLite can't drop a NOT NULL via ALTER, so rebuild the
+  // table — same swap shape as the #301 migration. Existing rows keep their
+  // network_id verbatim (they stay network-scoped; nothing silently becomes
+  // global), only the column constraint changes. Fresh installs already have the
+  // nullable shape from the CREATE TABLE above, so detect the old NOT NULL via
+  // table_info and skip the rebuild when it's already nullable (copies zero work).
+  const netCol = (db.prepare(`PRAGMA table_info(ignored_masks)`).all() as TableInfoRow[]).find(
+    (c) => c.name === 'network_id',
+  );
+  if (netCol && netCol.notnull === 1) {
+    const rebuild = db.transaction(() => {
+      db.exec(`DROP INDEX IF EXISTS idx_ignored_masks_user_net`);
+      db.exec(`
+        CREATE TABLE ignored_masks_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          network_id INTEGER,
+          mask TEXT COLLATE NOCASE,
+          channels TEXT,
+          pattern TEXT,
+          pattern_kind TEXT NOT NULL DEFAULT 'substr',
+          levels TEXT NOT NULL DEFAULT 'ALL',
+          is_except INTEGER NOT NULL DEFAULT 0,
+          expires_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`
+        INSERT INTO ignored_masks_new
+          (id, user_id, network_id, mask, channels, pattern, pattern_kind, levels, is_except, expires_at, created_at)
+        SELECT
+          id, user_id, network_id, mask, channels, pattern, pattern_kind, levels, is_except, expires_at, created_at
+        FROM ignored_masks
+      `);
+      db.exec(`DROP TABLE ignored_masks`);
+      db.exec(`ALTER TABLE ignored_masks_new RENAME TO ignored_masks`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_ignored_masks_user_net ON ignored_masks(user_id, network_id)`,
+      );
     });
     const prevFk = db.pragma('foreign_keys', { simple: true });
     db.pragma('foreign_keys = OFF');

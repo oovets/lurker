@@ -12,6 +12,8 @@ import {
   removeRuleById,
   removeRuleByMask,
   listRules,
+  listGlobalRules,
+  listScopedRules,
   sweepExpired as sweepExpiredRows,
 } from '../db/ignoredMasks.js';
 import { compileIgnoreRules, canonicalizeLevels } from './ignoreMatch.js';
@@ -22,19 +24,27 @@ const ALLOWED_KINDS = new Set(['substr', 'full', 'regex']);
 const MAX_PATTERN_LENGTH = 512;
 
 class IgnoreRulesService {
+  // Keyed by `${userId}:${networkId}`; getCompiled is only ever called with a
+  // real networkId (from a live connection), so we never key on a null network.
   private cache = new Map<string, Compiled>();
 
   private key(userId: number, networkId: number): string {
     return `${userId}:${networkId}`;
   }
 
+  /** A single network's own rules (excludes globals) — for the per-network UI bucket. */
   list(userId: number, networkId: number): IgnoreRuleRow[] {
     return listRules({ userId, networkId });
   }
 
+  /** The user's global rules — for the global UI bucket. */
+  listGlobal(userId: number): IgnoreRuleRow[] {
+    return listGlobalRules(userId);
+  }
+
   add(
     userId: number,
-    networkId: number,
+    networkId: number | null,
     input: IgnoreRuleInput,
   ): { ok: false; error: string } | { ok: true; id: number; created: boolean } {
     if (!ALLOWED_KINDS.has(input.patternKind)) {
@@ -71,34 +81,44 @@ class IgnoreRulesService {
     return { ok: true, id, created };
   }
 
-  removeById(userId: number, networkId: number, id: number): boolean {
-    const ok = removeRuleById({ userId, networkId, id });
+  removeById(userId: number, networkId: number | null, id: number): boolean {
+    const ok = removeRuleById({ userId, id });
     if (ok) this.invalidate(userId, networkId);
     return ok;
   }
 
-  removeByMask(userId: number, networkId: number, mask: string): number {
+  removeByMask(userId: number, networkId: number | null, mask: string): number {
     const n = removeRuleByMask({ userId, networkId, mask });
-    if (n) this.invalidate(userId, networkId);
+    // A by-mask delete can touch both globals and the network's own rules, so
+    // drop every cache entry for the user rather than reason about which.
+    if (n) this.invalidate(userId, null);
     return n;
   }
 
+  // The compiled set for one network is globals ∪ that network's rules.
   getCompiled(userId: number, networkId: number): Compiled {
     const k = this.key(userId, networkId);
     const cached = this.cache.get(k);
     if (cached) return cached;
-    const compiled = compileIgnoreRules(listRules({ userId, networkId }));
+    const compiled = compileIgnoreRules(listScopedRules({ userId, networkId }));
     this.cache.set(k, compiled);
     return compiled;
   }
 
-  invalidate(userId: number, networkId: number): void {
-    this.cache.delete(this.key(userId, networkId));
+  // A global rule (networkId null) feeds every network's compiled set, so drop
+  // all of the user's entries; a network-scoped change drops only that one.
+  invalidate(userId: number, networkId: number | null): void {
+    if (networkId == null) {
+      const prefix = `${userId}:`;
+      for (const k of this.cache.keys()) if (k.startsWith(prefix)) this.cache.delete(k);
+    } else {
+      this.cache.delete(this.key(userId, networkId));
+    }
   }
 
   // Delete every lapsed rule, invalidate the caches it touched, and return the
   // affected (user, network) pairs so the caller can fan out updated lists.
-  sweepExpired(): { userId: number; networkId: number }[] {
+  sweepExpired(): { userId: number; networkId: number | null }[] {
     const affected = sweepExpiredRows();
     for (const { userId, networkId } of affected) this.invalidate(userId, networkId);
     return affected;
