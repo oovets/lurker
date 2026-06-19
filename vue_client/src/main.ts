@@ -10,6 +10,7 @@ import '@fortawesome/fontawesome-free/css/solid.min.css';
 import '@fortawesome/fontawesome-free/css/regular.min.css';
 import './assets/main.css';
 import { installVisualViewport } from './composables/useVisualViewport.js';
+import { preloadEmoji } from './composables/useEmoji.js';
 
 installVisualViewport();
 
@@ -17,3 +18,8 @@ const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 app.mount('#app');
+
+// Fetch the emoji table up front (during the initial connect/buffer-load pause)
+// so render-time `:shortcode:` parsing has it ready. Render falls back to the
+// literal text until it lands, then repaints — see useEmoji.ts.
+preloadEmoji();

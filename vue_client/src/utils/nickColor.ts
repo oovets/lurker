@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { createUrlRegex } from '../../../shared/urlPattern.js';
+import { shortcodeScanRegex } from './emojiShortcodes.js';
 
 // Deterministic nick coloring. Mirrors weechat's gui_nick_find_color:
 // trim stop chars, lowercase, hash, modulo a palette.
@@ -181,6 +182,42 @@ function splitTextByChannels(text: string): ChannelOrTextSegment[] {
   }
   if (lastIdx < text.length) out.push({ kind: 'text', text: text.slice(lastIdx) });
   return out;
+}
+
+interface EmojiOrTextPiece {
+  text: string;
+  // true when `text` is an emoji glyph that replaced a `:shortcode:` — the
+  // caller emits it as-is and skips the nick pass (a glyph has no nick inside).
+  emoji?: boolean;
+}
+
+// Replace every resolvable `:shortcode:` with its emoji glyph, splitting the
+// run into literal / glyph pieces. `emojiFn` (typically `emojiGlyph`) is the
+// injected lookup; it's null until the emoji table loads and in non-message
+// callers, in which case the text passes through untouched. Unknown shortcodes
+// (`:foo:` with no match) are left literal. Uses the composer's grammar via
+// `shortcodeScanRegex`, so what we auto-convert on send we render on receive.
+// Runs on text that has already had URLs and channels split out, so a
+// `http://x:y:z` or `#chan:foo` token never reaches this pass.
+function splitTextByEmoji(
+  text: string,
+  emojiFn: ((name: string) => string | null) | null | undefined,
+): EmojiOrTextPiece[] {
+  if (!emojiFn || !text) return [{ text }];
+  const re = shortcodeScanRegex();
+  const out: EmojiOrTextPiece[] = [];
+  let lastIdx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const glyph = emojiFn(m[1]);
+    if (glyph == null) continue; // not a known emoji — leave `:name:` literal
+    const start = m.index;
+    if (start > lastIdx) out.push({ text: text.slice(lastIdx, start) });
+    out.push({ text: glyph, emoji: true });
+    lastIdx = start + m[0].length;
+  }
+  if (lastIdx < text.length) out.push({ text: text.slice(lastIdx) });
+  return out.length ? out : [{ text }];
 }
 
 interface NickTextSegment {
@@ -467,14 +504,19 @@ export function segmentHasStyle(seg: RenderSegment): boolean {
   );
 }
 
-// Channel detection then nick detection over a plain (URL-free) text run.
+// Channel, then emoji, then nick detection over a plain (URL-free) text run.
 // Channels are matched first because a channel token can't contain a nick
-// (nicks never start with #/&), so the order is unambiguous.
+// (nicks never start with #/&), so the order is unambiguous. Emoji shortcodes
+// run next so a glyph is emitted whole and the remaining literal text still
+// gets the nick pass — and a nick that happens to spell an emoji name (`:bone:`
+// vs a user "bone") can't collide, since the shortcode needs the surrounding
+// colons.
 function splitPlainText(
   text: string,
   nickSet: Set<string> | null | undefined,
   selfLower: string | null | undefined,
   colorFn: ((nick: string) => string | null) | null | undefined,
+  emojiFn: ((name: string) => string | null) | null | undefined,
 ): RenderSegment[] {
   const out: RenderSegment[] = [];
   for (const seg of splitTextByChannels(text)) {
@@ -483,8 +525,15 @@ function splitPlainText(
       continue;
     }
     if (!seg.text) continue;
-    for (const ns of colorNicksInText(seg.text, nickSet, selfLower, colorFn)) {
-      if (ns.text) out.push(ns);
+    for (const piece of splitTextByEmoji(seg.text, emojiFn)) {
+      if (piece.emoji) {
+        out.push({ text: piece.text });
+        continue;
+      }
+      if (!piece.text) continue;
+      for (const ns of colorNicksInText(piece.text, nickSet, selfLower, colorFn)) {
+        if (ns.text) out.push(ns);
+      }
     }
   }
   return out;
@@ -495,6 +544,7 @@ function splitRunIntoSegments(
   nickSet: Set<string> | null | undefined,
   selfLower: string | null | undefined,
   colorFn: ((nick: string) => string | null) | null | undefined,
+  emojiFn: ((name: string) => string | null) | null | undefined,
 ): RenderSegment[] {
   if (!text) return [];
   const out: RenderSegment[] = [];
@@ -504,27 +554,34 @@ function splitRunIntoSegments(
       continue;
     }
     if (!seg.text) continue;
-    out.push(...splitPlainText(seg.text, nickSet, selfLower, colorFn));
+    out.push(...splitPlainText(seg.text, nickSet, selfLower, colorFn, emojiFn));
   }
   return out;
 }
 
 // Split `text` into renderable segments. Formatting codes are parsed first so
-// each downstream segment carries its IRC formatting attrs; URL splitting then
-// nick splitting run on the cleaned text inside each formatting run.
+// each downstream segment carries its IRC formatting attrs; URL, then channel,
+// then emoji, then nick splitting run on the cleaned text inside each
+// formatting run.
+//
+// `emojiFn` (optional) resolves a `:shortcode:` to its glyph for the
+// client-side render-time emoji pass — pass `emojiGlyph` (once the table has
+// loaded) to turn `:tada:` into 🎉, or omit/null to leave shortcodes literal.
+// It's render-only: the stored message text is never mutated.
 //
 // Returned segment shapes (callers branch on these in order):
 //   { text, spoiler, ...fmt }           — hidden run (fg===bg); render as a
 //                                         click-to-reveal box, never an <a>
 //   { url, text, ...fmt }               — clickable link (with formatting)
 //   { channel, text, ...fmt }           — clickable IRC channel name
-//   { text, color?, self?, ...fmt }     — nick / plain text (with formatting)
+//   { text, color?, self?, ...fmt }     — nick / plain text / emoji glyph
 // where fmt is { bold?, italic?, underline?, strike?, fg?, bg? }.
 export function splitTextByTokens(
   text: string | null | undefined,
   nickSet: Set<string> | null | undefined,
   selfLower: string | null | undefined,
   colorFn: ((nick: string) => string | null) | null | undefined,
+  emojiFn?: ((name: string) => string | null) | null,
 ): RenderSegment[] {
   if (!text) return [{ text: '' }];
   const runs = parseIrcFormatting(text);
@@ -548,7 +605,7 @@ export function splitTextByTokens(
     }
     if (run.fg != null) fmt.fg = run.fg;
     if (run.bg != null) fmt.bg = run.bg;
-    for (const seg of splitRunIntoSegments(run.text, nickSet, selfLower, colorFn)) {
+    for (const seg of splitRunIntoSegments(run.text, nickSet, selfLower, colorFn, emojiFn)) {
       out.push({ ...seg, ...fmt });
     }
   }

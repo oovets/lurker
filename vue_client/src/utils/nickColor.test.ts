@@ -174,3 +174,88 @@ describe('segmentInlineStyle / segmentHasStyle — background colour', () => {
     expect(segmentHasStyle({ text: 'x' })).toBe(false);
   });
 });
+
+describe('splitTextByTokens — emoji shortcodes', () => {
+  // A stand-in for the emoji table so the render-time pass is deterministic
+  // without loading the real ~1,900-entry chunk. The real resolver (emojiGlyph)
+  // is exercised in emojiShortcodes.test.ts.
+  const FAKE: Record<string, string> = {
+    smile: '😄',
+    tada: '🎉',
+    '+1': '👍',
+    'e-mail': '📧',
+  };
+  const emoji = (name: string): string | null => FAKE[name.toLowerCase()] ?? null;
+  const parseEmoji = (text: string) => splitTextByTokens(text, null, null, null, emoji);
+
+  it('replaces a known :shortcode: with its glyph', () => {
+    expect(parseEmoji(':smile:')).toEqual([{ text: '😄' }]);
+  });
+
+  it('replaces a shortcode mid-sentence, keeping the surrounding text', () => {
+    expect(parseEmoji('well :tada: done')).toEqual([
+      { text: 'well ' },
+      { text: '🎉' },
+      { text: ' done' },
+    ]);
+  });
+
+  it('matches a case-insensitive shortcode', () => {
+    expect(parseEmoji(':TADA:')).toEqual([{ text: '🎉' }]);
+  });
+
+  it('handles + and - inside the shortcode name', () => {
+    expect(parseEmoji('nice :+1: then :e-mail:')).toEqual([
+      { text: 'nice ' },
+      { text: '👍' },
+      { text: ' then ' },
+      { text: '📧' },
+    ]);
+  });
+
+  it('converts adjacent shortcodes', () => {
+    expect(parseEmoji(':+1::+1:')).toEqual([{ text: '👍' }, { text: '👍' }]);
+  });
+
+  it('leaves an unknown shortcode literal', () => {
+    expect(parseEmoji('what :nope: is')).toEqual([{ text: 'what :nope: is' }]);
+  });
+
+  it('does not convert when the opening colon hugs a preceding word char', () => {
+    // The composer's boundary rule: "word:smile:" is not a shortcode start.
+    expect(parseEmoji('word:smile:')).toEqual([{ text: 'word:smile:' }]);
+  });
+
+  it('does not convert a clock like 12:00:00', () => {
+    expect(parseEmoji('at 12:00:00 sharp')).toEqual([{ text: 'at 12:00:00 sharp' }]);
+  });
+
+  it('passes text through unchanged when no emojiFn is supplied', () => {
+    // The 4-arg form (LinkedText pre-load, composer-less callers) never converts.
+    expect(splitTextByTokens(':smile:', null, null, null)).toEqual([{ text: ':smile:' }]);
+  });
+
+  it('carries active IRC formatting onto an emoji glyph', () => {
+    expect(splitTextByTokens(`${BOLD}:tada:`, null, null, null, emoji)).toEqual([
+      { text: '🎉', bold: true },
+    ]);
+  });
+
+  it('runs after channel splitting — a shortcode after a #channel still converts', () => {
+    expect(parseEmoji('#chan :tada:')).toEqual([
+      { text: '#chan', channel: '#chan' },
+      { text: ' ' },
+      { text: '🎉' },
+    ]);
+  });
+
+  it('still colours a nick that follows an emoji', () => {
+    const nickSet = new Set(['alice']);
+    const color = (n: string): string | null => (n.toLowerCase() === 'alice' ? '#f00' : null);
+    expect(splitTextByTokens(':tada: alice', nickSet, null, color, emoji)).toEqual([
+      { text: '🎉' },
+      { text: ' ' },
+      { text: 'alice', color: '#f00', self: false },
+    ]);
+  });
+});

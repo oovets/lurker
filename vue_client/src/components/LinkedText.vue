@@ -10,6 +10,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { splitTextByTokens } from '../utils/nickColor.js';
+import { emojiFn } from '../composables/useEmoji.js';
 import RenderSegments from './RenderSegments.vue';
 
 // Renders a plain-text string with URLs auto-linked and IRC formatting
@@ -26,5 +27,7 @@ const props = withDefaults(
   { text: '' },
 );
 
-const segments = computed(() => splitTextByTokens(props.text, null, null, null));
+// emojiFn() makes this reactive to the emoji table loading, so a topic/motd
+// containing a `:shortcode:` repaints with the glyph once it's ready.
+const segments = computed(() => splitTextByTokens(props.text, null, null, null, emojiFn()));
 </script>

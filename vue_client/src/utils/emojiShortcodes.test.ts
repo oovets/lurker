@@ -3,10 +3,13 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  emojiGlyph,
   findActiveShortcode,
   findCompletedShortcode,
   loadEmoji,
+  onEmojiLoaded,
   rankShortcodes,
+  shortcodeScanRegex,
 } from './emojiShortcodes.js';
 
 describe('findActiveShortcode', () => {
@@ -125,5 +128,68 @@ describe('loadEmoji', () => {
     const mod = await first;
     expect(typeof mod.searchEmoji).toBe('function');
     expect(typeof mod.emojiForShortcode).toBe('function');
+  });
+});
+
+describe('shortcodeScanRegex', () => {
+  // Collect every shortcode body the global matcher finds in `text`.
+  function scan(text: string): string[] {
+    const re = shortcodeScanRegex();
+    const out: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) out.push(m[1]);
+    return out;
+  }
+
+  it('matches every completed :name: in a string', () => {
+    expect(scan('a :smile: b :tada:')).toEqual(['smile', 'tada']);
+  });
+
+  it('matches names containing + and -', () => {
+    expect(scan(':+1: and :e-mail:')).toEqual(['+1', 'e-mail']);
+  });
+
+  it('skips a colon glued to a preceding word or number', () => {
+    expect(scan('word:smile: 12:00:00')).toEqual([]);
+  });
+
+  it('returns a fresh, independent regex each call', () => {
+    const a = shortcodeScanRegex();
+    a.exec(':smile:'); // advances a.lastIndex
+    expect(shortcodeScanRegex().exec(':tada:')?.[1]).toBe('tada');
+  });
+});
+
+describe('emojiGlyph', () => {
+  it('resolves a known shortcode (case-insensitive) once the table is loaded', async () => {
+    await loadEmoji();
+    expect(emojiGlyph('tada')).toBe('🎉');
+    expect(emojiGlyph('TADA')).toBe('🎉');
+    expect(emojiGlyph('thumbsup')).toBe('👍');
+  });
+
+  it('returns null for an unknown shortcode', async () => {
+    await loadEmoji();
+    expect(emojiGlyph('definitely_not_an_emoji')).toBeNull();
+  });
+});
+
+describe('onEmojiLoaded', () => {
+  it('notifies a listener once the table is available', async () => {
+    let notified = false;
+    onEmojiLoaded(() => {
+      notified = true;
+    });
+    await loadEmoji();
+    expect(notified).toBe(true);
+  });
+
+  it('fires immediately when the table is already loaded', async () => {
+    await loadEmoji();
+    let notified = false;
+    onEmojiLoaded(() => {
+      notified = true;
+    });
+    expect(notified).toBe(true);
   });
 });

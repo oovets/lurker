@@ -21,6 +21,17 @@ const NAME = '[a-z0-9_+-]+';
 const OPEN_RE = new RegExp(`(?<![a-z0-9_+-]):(${NAME})$`, 'i');
 const CLOSE_RE = new RegExp(`(?<![a-z0-9_+-]):(${NAME}):$`, 'i');
 
+// A *global* matcher for every completed `:name:` in a string, used by the
+// render-time emoji pass (`splitTextByEmoji` in nickColor). It shares NAME and
+// the same opening-boundary rule as OPEN_RE/CLOSE_RE, so the renderer
+// recognises exactly what the composer auto-converts on send — a clock
+// (`12:00`), an `http://` URL, or `word:bone` never reads as a shortcode. A
+// fresh instance is returned per call because a global regex carries mutable
+// `lastIndex`.
+export function shortcodeScanRegex(): RegExp {
+  return new RegExp(`(?<![a-z0-9_+-]):(${NAME}):`, 'gi');
+}
+
 export interface ShortcodeToken {
   /** The shortcode body, lowercased, colons stripped. */
   name: string;
@@ -78,12 +89,54 @@ export function rankShortcodes(names: string[], query: string): string[] {
 // A failed import (offline, etc.) clears the cache so the next caller retries
 // rather than being stuck with a permanently-rejected promise.
 let emojiModule: Promise<typeof import('./emojiData.js')> | null = null;
+// The resolved table, cached for synchronous render-time lookups (`emojiGlyph`).
+// Stays null until the chunk lands; the render pass treats that as "no emoji
+// yet" and shows the literal `:name:` until a reload re-runs the split.
+let loadedTable: Record<string, string> | null = null;
+// One-shot listeners fired when the table first becomes available, whichever
+// caller triggered the load. Lets the render layer (useEmoji) recover even if
+// its own preload failed: a later successful load from anywhere — the
+// composer's suggester or auto-convert — still flips the render gate, no
+// reload needed. Cleared on success; a failed load keeps them registered so
+// the next attempt still notifies.
+const loadedListeners = new Set<() => void>();
+function notifyEmojiLoaded(): void {
+  const cbs = [...loadedListeners];
+  loadedListeners.clear();
+  for (const cb of cbs) cb();
+}
 export function loadEmoji(): Promise<typeof import('./emojiData.js')> {
   if (!emojiModule) {
     emojiModule = import('./emojiData.js');
-    emojiModule.catch(() => {
-      emojiModule = null;
-    });
+    emojiModule
+      .then((mod) => {
+        loadedTable = mod.EMOJI;
+        notifyEmojiLoaded();
+        return mod;
+      })
+      .catch(() => {
+        emojiModule = null;
+      });
   }
   return emojiModule;
+}
+
+// Register a callback for when the emoji table is available. Fires immediately
+// if it's already loaded, otherwise once the (current or a later) load resolves.
+export function onEmojiLoaded(cb: () => void): void {
+  if (loadedTable) {
+    cb();
+    return;
+  }
+  loadedListeners.add(cb);
+}
+
+// Synchronous `:shortcode:` → glyph resolver for the render-time pass. Returns
+// null when `name` isn't a known emoji, or when the table chunk hasn't loaded
+// yet — so render stays synchronous and a not-yet-loaded shortcode falls
+// through as literal text. Callers kick the load off up front (`preloadEmoji`)
+// and re-render once it resolves. Matching is case-insensitive, mirroring
+// `emojiForShortcode` in emojiData.ts.
+export function emojiGlyph(name: string): string | null {
+  return loadedTable?.[name.toLowerCase()] ?? null;
 }

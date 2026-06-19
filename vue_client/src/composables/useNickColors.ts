@@ -5,6 +5,7 @@ import type { ComputedRef } from 'vue';
 import { computed } from 'vue';
 import { useSettingsStore } from '../stores/settings.js';
 import { nickColor, splitTextByTokens } from '../utils/nickColor.js';
+import { emojiFn } from './useEmoji.js';
 
 export interface NickColorsAPI {
   color(nick: string): string | null;
@@ -29,7 +30,9 @@ export function useNickColors(): NickColorsAPI {
   }
 
   function splitText(text: string, nickSet: Set<string>, selfLower: string | null): unknown[] {
-    return splitTextByTokens(text, nickSet, selfLower, color);
+    // emojiFn() reads the reactive emoji-ready signal, so message rows re-run
+    // this split (showing glyphs) once the emoji table finishes loading.
+    return splitTextByTokens(text, nickSet, selfLower, color, emojiFn());
   }
 
   return { color, splitText, selfColor };
