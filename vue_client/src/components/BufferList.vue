@@ -11,10 +11,57 @@
       :class="{ 'unread-bold': unreadBold }"
       @scroll="scheduleRecompute"
     >
+      <!-- LURKER: the system buffer (#355) as a real top-of-list row. The status
+           light tracks the Lurker connection; settings + options affordances
+           mirror the network header's channel-list + kebab. -->
+      <div class="net system-net">
+        <div
+          class="net-head"
+          :class="{ active: isSystemActive }"
+          title="Open Lurker system buffer"
+          @click="selectSystem"
+        >
+          <span
+            class="indicator"
+            :class="lurkerConnected ? 'good' : 'bad'"
+            :title="lurkerConnected ? 'Connected to Lurker' : 'Disconnected from Lurker'"
+          ></span>
+          <span class="name">LURKER</span>
+          <span
+            v-if="systemHighlights > 0 && showHighlightBadge"
+            class="badge highlight"
+            title="unread"
+            >●</span
+          >
+          <span v-if="systemUnread > 0" class="badge">{{ unreadLabel(systemUnread) }}</span>
+          <div class="net-actions">
+            <button
+              type="button"
+              class="net-action"
+              title="Settings"
+              aria-label="Settings"
+              @click.stop="openSettings"
+              @contextmenu.stop.prevent
+            >
+              <i class="fa-solid fa-gear"></i>
+            </button>
+            <button
+              type="button"
+              class="net-action"
+              title="Lurker options"
+              aria-label="Lurker options"
+              @click.stop="openSystemMenu($event)"
+              @contextmenu.stop.prevent
+            >
+              <i class="fa-solid fa-ellipsis-vertical"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- FRIENDS pseudo-network: a cross-network gathering of DM shortcuts. The
            header opens the compilation feed (:friends:); each row opens that
-           friend's DM on their primary network. The :system: console stays the
-           sidebar logo button. -->
+           friend's DM on their primary network. -->
       <div v-if="friends.contacts.length || isFriendsActive" class="net friends-net">
         <div
           class="net-head"
@@ -251,8 +298,9 @@ import draggable from 'vuedraggable';
 import { useNetworksStore, type Network, type PeerPresenceEntry } from '../stores/networks.js';
 import { useBuffersStore, type Buffer } from '../stores/buffers.js';
 import { useFriendsStore, primaryTargetOf, type Contact } from '../stores/friends.js';
-import { FRIENDS_KEY } from '../lib/virtualBuffers.js';
+import { FRIENDS_KEY, SYSTEM_KEY } from '../lib/virtualBuffers.js';
 import { connected as lurkerConnected } from '../composables/useSocket.js';
+import { useRouter } from 'vue-router';
 import { useDraftStore } from '../stores/drafts.js';
 import { usePinsStore } from '../stores/pins.js';
 import { useChannelNotifyStore } from '../stores/channelNotify.js';
@@ -275,9 +323,39 @@ const settings = useSettingsStore();
 const bufferActions = useBufferActions();
 const networkActions = useNetworkActions();
 const friendMenu = useContextMenu();
+const systemMenu = useContextMenu();
+const router = useRouter();
 
 function isNetworkConnected(net: Network): boolean {
   return networks.states[net.id]?.state === 'connected';
+}
+
+// LURKER system buffer (#355): a real top-of-list row. Its status light tracks
+// the Lurker connection; its unread badge is server-computed (notable lines
+// only). selectSystem routes through activate() so the read-state lifecycle runs.
+const isSystemActive = computed(() => networks.activeKey === SYSTEM_KEY);
+const systemBuf = computed(() => buffers.byKey(SYSTEM_KEY));
+const systemUnread = computed(() =>
+  countFor(systemBuf.value?.unread || 0, systemBuf.value?.highlighted || 0),
+);
+const systemHighlights = computed(() => systemBuf.value?.highlighted || 0);
+function selectSystem(): void {
+  buffers.activate(null, SYSTEM_KEY);
+}
+function openSettings(): void {
+  router.push('/settings');
+}
+// The kebab's menu is the home for Lurker-wide actions (just Settings today;
+// more later). The cog beside it is the one-click shortcut to the same place.
+function openSystemMenu(e: MouseEvent): void {
+  const btn = e.currentTarget as Element;
+  const rect = btn.getBoundingClientRect();
+  systemMenu.open(
+    [{ label: 'Settings…', icon: 'fa-solid fa-gear', onClick: () => router.push('/settings') }],
+    rect.left,
+    rect.bottom + 2,
+    btn,
+  );
 }
 
 // Buffer-list display settings — feed both the row CSS (bold gate) and the

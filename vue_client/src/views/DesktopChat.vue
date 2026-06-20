@@ -14,20 +14,11 @@
     @click="onChatClick"
   >
     <aside class="sidebar" :class="{ collapsed: !showChannels }">
-      <div class="sidebar-head">
-        <template v-if="showChannels">
-          <button
-            type="button"
-            class="logo"
-            :class="{ active: isSystemBuffer }"
-            title="Open system buffer"
-            @click="openSystemConsole"
-          >
-            lurker
-          </button>
-          <span v-if="!connected" class="status off" title="Disconnected">●</span>
-          <span class="head-spacer"></span>
-        </template>
+      <!-- The "lurker" header + connection dot moved into BufferList's LURKER
+           row (#355); the collapse toggle moved here to the footer (where the
+           settings cog used to be — the cog now lives on the LURKER row). -->
+      <BufferList v-if="showChannels" />
+      <div ref="footEl" class="sidebar-foot" :class="{ 'foot-wrapped': footWrapped }">
         <button
           class="link toggle"
           :title="showChannels ? 'Hide channel list' : 'Show channel list'"
@@ -35,12 +26,6 @@
         >
           <i :class="showChannels ? 'fa-solid fa-angles-left' : 'fa-solid fa-angles-right'"></i>
         </button>
-      </div>
-      <BufferList v-if="showChannels" />
-      <div ref="footEl" class="sidebar-foot" :class="{ 'foot-wrapped': footWrapped }">
-        <RouterLink class="link" to="/settings" title="Settings"
-          ><i class="fa-solid fa-gear"></i
-        ></RouterLink>
         <button class="link" @click="showSearch = true" title="Search messages">
           <i class="fa-solid fa-magnifying-glass"></i>
         </button>
@@ -227,10 +212,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import type { Network } from '../stores/networks.js';
-import { useBuffersStore, type Buffer } from '../stores/buffers.js';
-import { SYSTEM_KEY } from '../lib/virtualBuffers.js';
+import type { Buffer } from '../stores/buffers.js';
 import { useNetworksStore } from '../stores/networks.js';
-import { useSocket } from '../composables/useSocket.js';
 import { useChatBootstrap } from '../composables/useChatBootstrap.js';
 import { useActiveBuffer } from '../composables/useActiveBuffer.js';
 import { useSettingsStore } from '../stores/settings.js';
@@ -267,8 +250,6 @@ import { useNetworkEditor } from '../composables/useNetworkEditor.js';
 import { useJumpToMessage } from '../composables/useJumpToMessage.js';
 
 const networks = useNetworksStore();
-const buffers = useBuffersStore();
-const { connected } = useSocket();
 const {
   active,
   activeBuf,
@@ -284,11 +265,6 @@ const {
   hasNicklist,
 } = useActiveBuffer();
 
-function openSystemConsole() {
-  // Route through activate() (not networks.activateSystem) so the system buffer
-  // gets the full read-state lifecycle: divider snapshot + mark-read on entry.
-  buffers.activate(null, SYSTEM_KEY);
-}
 const settings = useSettingsStore();
 const nicklistCollapse = useNicklistCollapseStore();
 const nickNotes = useNickNotesStore();
@@ -603,35 +579,7 @@ useChatBootstrap({ onJump: onJumpToMessage });
   display: flex;
   flex-direction: column;
 }
-.sidebar-head {
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-.head-spacer {
-  flex: 1;
-}
-.logo {
-  color: var(--accent);
-  font-weight: bold;
-  background: transparent;
-  border: none;
-  padding: 0;
-  font: inherit;
-  cursor: pointer;
-}
-.logo:hover {
-  text-decoration: underline;
-}
-.logo.active {
-  text-decoration: underline;
-}
-.status.off {
-  color: var(--bad);
-}
-/* Pin the cog (settings) flush-left and the plus (add network) flush-right;
+/* Pin the collapse toggle flush-left and the plus (add network) flush-right;
    the middle icons distribute evenly between them. Flex with space-between
    scales to any number of middle icons without re-tuning the column count.
    `padding: 1ch 12px 8px` (not the original symmetric 8px) makes the foot's
@@ -670,13 +618,9 @@ useChatBootstrap({ onJump: onJumpToMessage });
   grid-template-columns: repeat(3, 1fr);
   justify-items: center;
 }
-/* Collapsed rail: hide the brand, swap the foot to a vertical stack, and
-   center everything in the 36px column. Foot icons keep their muscle-memory
-   spot at the bottom of the sidebar; the toggle chevron sits up top. */
-.sidebar.collapsed .sidebar-head {
-  padding: var(--space-4) 0;
-  justify-content: center;
-}
+/* Collapsed rail: swap the foot to a vertical stack and center everything in
+   the 36px column. The collapse/expand toggle lives in the foot now (where the
+   cog used to be), so the rail is just the stacked foot icons. */
 .sidebar.collapsed .sidebar-foot {
   flex-direction: column;
   padding: var(--space-4) 0;
