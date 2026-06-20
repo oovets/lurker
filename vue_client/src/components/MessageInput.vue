@@ -192,8 +192,11 @@ const nickColors = useNickColors();
 // first (scope null), then this network's own (scope = networkId). The index a
 // user sees in /ignore maps 1:1 to this array, so /unignore <n> resolves the
 // right rule and its scope.
-function combinedIgnores(networkId: number): { entry: IgnoreEntry; scope: number | null }[] {
+function combinedIgnores(networkId: number | null): { entry: IgnoreEntry; scope: number | null }[] {
   const globals = ignores.global.map((entry) => ({ entry, scope: null as number | null }));
+  // The app-scoped system buffer has no network, so only global rules are
+  // visible there.
+  if (networkId == null) return globals;
   const own = ignores
     .masksFor(networkId)
     .map((entry) => ({ entry, scope: networkId as number | null }));
@@ -1961,27 +1964,113 @@ function ackedSend(payload: Record<string, unknown>, body: string): boolean {
   return true;
 }
 
-// Commands that are network-agnostic and so may run from the app-scoped system
-// buffer (issue #355), which has no network. Everything else needs an active
-// network buffer. /network and /set/get (#356/#357) will join this set.
-const SYSTEM_BUFFER_COMMANDS = new Set(['commands']);
+// /ignore and /unignore operate on the per-user ignore list (global by default;
+// `-network` scopes to the active network), so they're network-agnostic and run
+// from the system buffer too — networkId is null there.
+function runIgnore(argLine: string, networkId: number | null, target: string): boolean {
+  const args = argLine.trim();
+  if (!args) {
+    const list = combinedIgnores(networkId);
+    if (!list.length) {
+      localInfo(networkId, target, 'ignore list is empty.');
+    } else {
+      localInfo(networkId, target, `ignore list (${list.length}):`);
+      list.forEach(({ entry, scope }, i) =>
+        localInfo(networkId, target, formatIgnoreEntry(entry, i + 1, scope === null)),
+      );
+    }
+    return true;
+  }
+  const parsed = parseIgnoreArgs(args);
+  if (parsed.error) {
+    localInfo(networkId, target, `/ignore: ${parsed.error}`);
+    return true;
+  }
+  // Default scope is global (null); -network scopes to the current network,
+  // which the system buffer doesn't have.
+  if (parsed.scopeNetwork && networkId == null) {
+    localInfo(
+      networkId,
+      target,
+      '/ignore -network needs an active network — switch to a channel or DM.',
+    );
+    return true;
+  }
+  ignores.addRule(parsed.scopeNetwork ? networkId : null, parsed);
+  return true;
+}
+
+function runUnignore(argLine: string, networkId: number | null, target: string): boolean {
+  const arg = argLine.trim();
+  if (!arg) {
+    localInfo(networkId, target, 'usage: /unignore <index|mask>  (index from /ignore)');
+    return true;
+  }
+  const list = combinedIgnores(networkId);
+  if (/^\d+$/.test(arg)) {
+    const item = list[Number(arg) - 1];
+    if (!item) {
+      localInfo(networkId, target, `/unignore: no ignore #${arg} (see /ignore)`);
+      return true;
+    }
+    ignores.removeRule(item.scope, { id: item.entry.id });
+    localInfo(
+      networkId,
+      target,
+      `removed ignore #${arg}: ${summarizeIgnoreEntry(item.entry, item.scope === null)}`,
+    );
+    return true;
+  }
+  // Remove-by-mask matches the stored mask exactly (case-insensitive) across the
+  // visible scope. Count local matches so we confirm or report nothing-removed.
+  const matches = list.filter(
+    ({ entry }) => (entry.mask ?? '').toLowerCase() === arg.toLowerCase(),
+  );
+  if (!matches.length) {
+    localInfo(networkId, target, `/unignore: no ignore with mask "${arg}" (see /ignore)`);
+    return true;
+  }
+  ignores.removeRule(networkId, { mask: arg });
+  localInfo(
+    networkId,
+    target,
+    `removed ${matches.length} ignore${matches.length > 1 ? 's' : ''} matching "${arg}".`,
+  );
+  return true;
+}
 
 function handleCommand(line: string, networkId: number | null, target: string): boolean {
   const [cmd, ...rest] = line.slice(1).split(/\s+/);
   const argLine = line.slice(1 + cmd.length).trim();
   const verb = cmd.toLowerCase();
-  // From the system buffer (no network) only network-agnostic commands run;
-  // anything else gets a friendly redirect rather than a raw send to nowhere.
-  // The branch is terminal — every null-network path returns here, which also
-  // narrows networkId to a number for the switch below.
+
+  // Network-agnostic commands act on global / user-wide state (the local command
+  // cheatsheet, the cross-network away flag, the per-user ignore list), so they
+  // run whether or not a network is active — including from the system buffer.
+  // Handled before the network gate, which then narrows networkId to a number
+  // for the switch below.
+  switch (verb) {
+    case 'commands':
+      for (const commandLine of COMMANDS_LINES) localInfo(networkId, target, commandLine);
+      return true;
+    case 'away':
+      // Empty arg → clear away. User-scoped (applies across every connection),
+      // so it carries no networkId.
+      return sendOrToast({ type: 'away', message: argLine }, line);
+    case 'back':
+      return sendOrToast({ type: 'back' }, line);
+    case 'ignore':
+      return runIgnore(argLine, networkId, target);
+    case 'unignore':
+      return runUnignore(argLine, networkId, target);
+  }
+
+  // Everything else acts on a specific network/buffer.
   if (networkId == null) {
-    if (!SYSTEM_BUFFER_COMMANDS.has(verb)) {
-      localInfo(null, target, `/${verb} needs an active network — open a channel or DM first.`);
-    } else if (verb === 'commands') {
-      for (const commandLine of COMMANDS_LINES) localInfo(null, target, commandLine);
-    }
+    localInfo(null, target, `/${verb} needs an active network — switch to a channel or DM first.`);
     return true;
   }
+
   switch (verb) {
     case 'me':
       return ackedSend({ type: 'action', networkId, target, text: argLine }, argLine);
@@ -2046,11 +2135,6 @@ function handleCommand(line: string, networkId: number | null, target: string): 
     case 'raw':
     case 'quote':
       return sendOrToast({ type: 'raw', networkId, line: argLine }, line);
-    case 'away':
-      // Empty arg → clear away. Server treats it the same as /back.
-      return sendOrToast({ type: 'away', message: argLine }, line);
-    case 'back':
-      return sendOrToast({ type: 'back' }, line);
     case 'whois': {
       const who = rest[0];
       if (!who) {
@@ -2169,73 +2253,6 @@ function handleCommand(line: string, networkId: number | null, target: string): 
       const q = argLine.trim();
       if (q) chanlist.setQuery(networkId, q);
       channelListModal.open(networkId);
-      return true;
-    }
-    case 'ignore': {
-      // No-arg form: dump the ignore rules visible here (globals + this
-      // network's) into the active buffer as system messages, with an index for
-      // /unignore. The store already has the lists (snapshot +
-      // ignore-list-updated), so it's a purely client-side read.
-      const args = argLine.trim();
-      if (!args) {
-        const list = combinedIgnores(networkId);
-        if (!list.length) {
-          localInfo(networkId, target, 'ignore list is empty.');
-        } else {
-          localInfo(networkId, target, `ignore list (${list.length}):`);
-          list.forEach(({ entry, scope }, i) =>
-            localInfo(networkId, target, formatIgnoreEntry(entry, i + 1, scope === null)),
-          );
-        }
-        return true;
-      }
-      const parsed = parseIgnoreArgs(args);
-      if (parsed.error) {
-        localInfo(networkId, target, `/ignore: ${parsed.error}`);
-        return true;
-      }
-      // Default scope is global (null); -network scopes to the current network.
-      ignores.addRule(parsed.scopeNetwork ? networkId : null, parsed);
-      return true;
-    }
-    case 'unignore': {
-      const arg = argLine.trim();
-      if (!arg) {
-        localInfo(networkId, target, 'usage: /unignore <index|mask>  (index from /ignore)');
-        return true;
-      }
-      const list = combinedIgnores(networkId);
-      if (/^\d+$/.test(arg)) {
-        const item = list[Number(arg) - 1];
-        if (!item) {
-          localInfo(networkId, target, `/unignore: no ignore #${arg} (see /ignore)`);
-          return true;
-        }
-        ignores.removeRule(item.scope, { id: item.entry.id });
-        localInfo(
-          networkId,
-          target,
-          `removed ignore #${arg}: ${summarizeIgnoreEntry(item.entry, item.scope === null)}`,
-        );
-        return true;
-      }
-      // Remove-by-mask matches the stored mask exactly (case-insensitive) across
-      // the visible scope (globals + this network) — the same set the server
-      // deletes. Count local matches so we confirm or report nothing-removed
-      // instead of failing silently.
-      const matches = list.filter(
-        ({ entry }) => (entry.mask ?? '').toLowerCase() === arg.toLowerCase(),
-      );
-      if (!matches.length) {
-        localInfo(networkId, target, `/unignore: no ignore with mask "${arg}" (see /ignore)`);
-        return true;
-      }
-      ignores.removeRule(networkId, { mask: arg });
-      localInfo(
-        networkId,
-        target,
-        `removed ${matches.length} ignore${matches.length > 1 ? 's' : ''} matching "${arg}".`,
-      );
       return true;
     }
     case 'jitsi':
@@ -2431,9 +2448,6 @@ function handleCommand(line: string, networkId: number | null, target: string): 
         line,
       );
     }
-    case 'commands':
-      for (const commandLine of COMMANDS_LINES) localInfo(networkId, target, commandLine);
-      return true;
     default:
       return sendOrToast({ type: 'raw', networkId, line: line.slice(1) }, line);
   }
