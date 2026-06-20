@@ -791,14 +791,15 @@ const renderRows = computed((): RenderRow[] => {
   return final;
 });
 
-// A system-buffer line (#355) tied to a specific network shows that network's
-// name in the prefix column. Preferred source is the stable id, resolved to the
+// The origin-network name for a system-buffer line (#355), or null when the
+// line is network-agnostic. Preferred source is the stable id, resolved to the
 // network's *current* name at render time, so a rename (or the networks store
 // loading after the log snapshot) updates the prefix live. Falls back to the
 // `net:<name>` scope label — a snapshot of the name when the line was written —
 // for older rows that predate the id and for a network that no longer exists,
-// so existing lines still carry a label. Returns null for network-agnostic
-// lines, which render the neutral `--` marker.
+// so existing lines still carry a label. null = network-agnostic, which
+// prefixText renders as "System" (real server MOTD, type 'motd', is the `--`
+// case — not this).
 function systemNetworkName(m: ChatMessage | undefined): string | null {
   if (m?.type !== 'system') return null;
   const id = m.originNetworkId;

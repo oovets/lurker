@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Brad Root
 // SPDX-License-Identifier: MPL-2.0
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -24,6 +24,8 @@ beforeAll(async () => {
   alice = createUser('syslog-alice').id;
   bob = createUser('syslog-bob').id;
 });
+
+afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('log', () => {
   it('global lines have null userId and surface to every getRecent caller', () => {

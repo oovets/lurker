@@ -190,7 +190,10 @@ export function listSystemMessages(
   { before, afterId, limit = 50 }: { before?: number; afterId?: number; limit?: number } = {},
 ): SystemMessageRow[] {
   const uid = Number(userId);
-  if (afterId) {
+  // `afterId != null` (not truthy): afterId 0 is a valid "everything after the
+  // start" cursor the history 'after' mode accepts — a truthy check would drop
+  // it to the latest/before path and return the wrong slice.
+  if (afterId != null) {
     return (listAfterStmt.all(uid, afterId, limit) as RawRow[]).map(hydrate);
   }
   const rows = (

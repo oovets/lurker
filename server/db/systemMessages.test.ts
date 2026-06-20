@@ -186,4 +186,20 @@ describe('keyset access (unified buffer delivery, #355)', () => {
     const miss = systemMessages.listSystemMessagesAround(u.id, theirs, 1);
     expect('anchorMissing' in miss && miss.anchorMissing).toBe(true);
   });
+
+  it('afterId 0 pages from the start (ascending), not latest', () => {
+    const u = createUser('sys-after0');
+    const older = line({ userId: u.id }).id;
+    const newer = line({ userId: u.id }).id; // newer > older
+    // latest page = the newest row.
+    expect(systemMessages.listSystemMessages(u.id, { limit: 1 }).at(-1)!.id).toBe(newer);
+    // afterId:0 = everything after the start, ascending → the OLDEST visible row,
+    // never the newest. (A truthy `if (afterId)` would drop 0 to the latest path.)
+    expect(systemMessages.listSystemMessages(u.id, { afterId: 0, limit: 1 })[0].id).not.toBe(newer);
+    const fromStart = systemMessages
+      .listSystemMessages(u.id, { afterId: 0, limit: 100 })
+      .map((r) => r.id);
+    expect(fromStart).toContain(older);
+    expect(fromStart.indexOf(older)).toBeLessThan(fromStart.indexOf(newer)); // ascending
+  });
 });
