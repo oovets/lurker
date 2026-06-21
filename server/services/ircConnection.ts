@@ -20,6 +20,7 @@ import highlightRulesService from './highlightRulesService.js';
 import ignoreRulesService from './ignoreRulesService.js';
 import { decideStamp } from './insertDecisions.js';
 import * as systemLog from './systemLog.js';
+import { effectiveSetting } from './settingsService.js';
 import { IRC_VERSION, APP_VERSION } from '../utils/userAgent.js';
 import { findUserById } from '../db/users.js';
 import { isNodeMode } from '../utils/edition.js';
@@ -2152,8 +2153,17 @@ export class IrcConnection {
     this.publishAwayState();
   }
 
-  disconnect(reason: string = DEFAULT_QUIT_MESSAGE): void {
-    this.client.quit(reason);
+  disconnect(reason?: string): void {
+    this.client.quit(reason ?? this.defaultQuitMessage());
+  }
+
+  // The QUIT reason for a clean disconnect when the caller gave none (the bare
+  // /quit command, auto-disconnect, shutdown): the user's configured
+  // chat.quit_message, or the built-in Lurker default when blank. Read here
+  // rather than baked into a const so APP_VERSION stays live in the fallback.
+  private defaultQuitMessage(): string {
+    const custom = effectiveSetting(this.network.user_id, 'chat.quit_message');
+    return typeof custom === 'string' && custom.trim() ? custom : DEFAULT_QUIT_MESSAGE;
   }
 
   dispose(reason: string = 'network removed'): void {

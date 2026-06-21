@@ -6,7 +6,7 @@
 // at module-load time). Without this, the IrcConnections built in these tests
 // write straight into the real data/lurker.db.
 import '../test-utils/isolateDb.js';
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import net from 'net';
 import { ircLineParser } from 'irc-framework';
 import type { ConnectOptions } from 'irc-framework';
@@ -26,6 +26,7 @@ import {
 } from './ircConnection.js';
 import { createIdentdServer, unregisterIdent } from './identd.js';
 import { createUser } from '../db/users.js';
+import { setUserSetting, deleteUserSetting } from '../db/settings.js';
 
 // The bare IrcConnections built below carry user_id: 1, and their join/part
 // handlers write system_messages (FK → users.id). Seed user id 1 in the
@@ -803,5 +804,62 @@ describe('built-in identd registration', () => {
     } finally {
       if (prev !== undefined) process.env.LURKER_IDENTD_ENABLED = prev;
     }
+  });
+});
+
+describe('disconnect quit message (#324)', () => {
+  function makeConn(): IrcConnection {
+    return new IrcConnection({
+      network: {
+        id: 1,
+        user_id: 1,
+        name: 'n',
+        host: 'irc.example.test',
+        port: 6697,
+        tls: 1,
+        trusted_certificates: 1,
+        nick: 'nick',
+        username: null,
+        realname: null,
+        server_password: null,
+        autoconnect: 1,
+        sasl_account: null,
+        sasl_password: null,
+        connect_commands: null,
+        position: 0,
+        created_at: new Date().toISOString(),
+      },
+      onEvent: () => {},
+    });
+  }
+
+  afterEach(() => deleteUserSetting(1, 'chat.quit_message'));
+
+  it('falls back to the built-in Lurker default when chat.quit_message is unset', () => {
+    const conn = makeConn();
+    const quit = vi.fn<(reason?: string) => void>();
+    conn.client.quit = quit;
+    conn.disconnect();
+    const reason = quit.mock.calls[0][0] ?? '';
+    expect(reason).toContain('Lurker');
+    expect(reason).toContain('https://lurker.chat');
+  });
+
+  it('uses the configured chat.quit_message when set', () => {
+    setUserSetting(1, 'chat.quit_message', 'bbl');
+    const conn = makeConn();
+    const quit = vi.fn<(reason?: string) => void>();
+    conn.client.quit = quit;
+    conn.disconnect();
+    expect(quit).toHaveBeenCalledWith('bbl');
+  });
+
+  it('lets an explicit reason override the configured message', () => {
+    setUserSetting(1, 'chat.quit_message', 'bbl');
+    const conn = makeConn();
+    const quit = vi.fn<(reason?: string) => void>();
+    conn.client.quit = quit;
+    conn.disconnect('see ya');
+    expect(quit).toHaveBeenCalledWith('see ya');
   });
 });

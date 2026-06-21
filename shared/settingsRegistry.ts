@@ -805,6 +805,20 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
       'of a new browser tab. Cmd/Ctrl-click always opens in a new tab.',
   },
 
+  // ─── Connection ───────────────────────────────────────────────────────
+  {
+    key: 'chat.quit_message',
+    label: 'Quit message',
+    category: 'chat',
+    group: 'connection',
+    type: 'string',
+    default: '',
+    description:
+      'The QUIT reason others see when you disconnect from a network and no ' +
+      'explicit /quit message is given. Leave blank to use the Lurker default ' +
+      '(the version and project URL).',
+  },
+
   // ─── Auto-away (sets you AWAY when no client is connected) ────────────
   {
     key: 'away.auto.enabled',
@@ -1353,6 +1367,7 @@ export const GROUPS: Readonly<Record<string, string>> = Object.freeze({
   consolidate: 'Join/part consolidation',
   composing: 'Composing',
   'smart-filter': 'Smart filter',
+  connection: 'Connection',
   'auto-away': 'Auto-away',
   provider: 'Provider',
   pipeline: 'Image pipeline',

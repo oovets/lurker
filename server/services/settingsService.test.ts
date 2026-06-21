@@ -11,12 +11,15 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lurker-test-settings-servi
 process.env.DATABASE_PATH = path.join(tmpDir, 'test.db');
 
 let settingsService: typeof SettingsServiceModule.default;
+let effectiveSetting: typeof SettingsServiceModule.effectiveSetting;
 let createUser: typeof import('../db/users.js').createUser;
 let user: ReturnType<typeof createUser>;
 
 beforeAll(async () => {
   ({ createUser } = await import('../db/users.js'));
-  settingsService = (await import('./settingsService.js')).default;
+  const mod = await import('./settingsService.js');
+  settingsService = mod.default;
+  effectiveSetting = mod.effectiveSetting;
   user = createUser('ss-alice');
 });
 
@@ -67,5 +70,20 @@ describe('reset', () => {
     const res = settingsService.reset(user.id, 'no.such.key');
     expect(res.ok).toBe(false);
     expect(!res.ok && res.error).toMatch(/unknown/);
+  });
+});
+
+describe('effectiveSetting', () => {
+  it('returns the registry default when unset and the override when set', () => {
+    const u = createUser('ss-effective');
+    // chat.quit_message defaults to '' (blank = built-in Lurker quit message).
+    expect(effectiveSetting(u.id, 'chat.quit_message')).toBe('');
+    settingsService.update(u.id, { 'chat.quit_message': 'gone fishing' });
+    expect(effectiveSetting(u.id, 'chat.quit_message')).toBe('gone fishing');
+  });
+
+  it('returns undefined for an unknown key', () => {
+    const u = createUser('ss-effective-2');
+    expect(effectiveSetting(u.id, 'no.such.key')).toBeUndefined();
   });
 });
