@@ -88,8 +88,12 @@ export function coerceSettingValue(
     case 'color':
     case 'secret':
       return { ok: true, value: raw };
-    default:
-      return { ok: false, error: `${(opt as SettingOption).key}: unsupported setting type` };
+    default: {
+      // Compile-time exhaustiveness: add a SettingType without a case above and
+      // `opt` is no longer `never`, so this assignment fails to build.
+      const unhandled: never = opt;
+      return { ok: false, error: `${String(unhandled)}: unsupported setting type` };
+    }
   }
 }
 

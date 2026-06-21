@@ -8,7 +8,7 @@ import type { SettingOption } from '../../../../shared/settingsRegistry.js';
 // Minimal registry options for each type — keeps the coercion/format tests
 // independent of the real registry's contents.
 const base = { label: 'x', category: 'c', group: 'g', description: 'd' };
-const boolOpt = { ...base, key: 'a.bool', type: 'bool', default: false } as SettingOption;
+const boolOpt = { ...base, key: 'a.bool', type: 'bool', default: false } satisfies SettingOption;
 const intOpt = {
   ...base,
   key: 'a.int',
@@ -16,17 +16,22 @@ const intOpt = {
   min: 9,
   max: 32,
   default: 14,
-} as SettingOption;
+} satisfies SettingOption;
 const enumOpt = {
   ...base,
   key: 'a.enum',
   type: 'enum',
   choices: ['left', 'right'],
   default: 'left',
-} as SettingOption;
-const listOpt = { ...base, key: 'a.list', type: 'string-list', default: [] } as SettingOption;
-const strOpt = { ...base, key: 'a.str', type: 'string', default: '' } as SettingOption;
-const secretOpt = { ...base, key: 'a.secret', type: 'secret', default: '' } as SettingOption;
+} satisfies SettingOption;
+const listOpt = {
+  ...base,
+  key: 'a.list',
+  type: 'string-list',
+  default: [],
+} satisfies SettingOption;
+const strOpt = { ...base, key: 'a.str', type: 'string', default: '' } satisfies SettingOption;
+const secretOpt = { ...base, key: 'a.secret', type: 'secret', default: '' } satisfies SettingOption;
 
 describe('splitSetArgs', () => {
   it('treats empty and `?` as a list request', () => {

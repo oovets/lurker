@@ -2208,10 +2208,13 @@ function runSet(argLine: string, networkId: number | null, target: string): void
 // /get <key> — read a setting into the buffer, noting the default when changed.
 function runGet(argLine: string, networkId: number | null, target: string): void {
   const reply = (msg: string) => localInfo(networkId, target, msg);
-  const key = argLine.trim().split(/\s+/)[0] ?? '';
-  if (!key) return reply('usage: /get <key>  (/set lists available keys)');
-  const opt = lookupSetting(key);
-  if (!opt) return reply(`/get: unknown setting "${key}" — /set lists available keys`);
+  const parts = argLine.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return reply('usage: /get <key>  (/set lists available keys)');
+  // Reject extra tokens (parity with /network) so a missing-quote typo doesn't
+  // silently read just the first word.
+  if (parts.length > 1) return reply('usage: /get <key>  (one key at a time)');
+  const opt = lookupSetting(parts[0]);
+  if (!opt) return reply(`/get: unknown setting "${parts[0]}" — /set lists available keys`);
   reply(`${opt.key} = ${formatSettingValue(opt, settings.effective(opt.key))}`);
   if (settings.isModified(opt.key)) {
     reply(`  default: ${formatSettingValue(opt, opt.default)}`);
