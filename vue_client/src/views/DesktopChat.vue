@@ -675,10 +675,15 @@ useChatBootstrap({ onJump: onJumpToMessage });
   align-self: stretch;
   text-align: center;
   padding: var(--space-4) 0;
-  /* Draw the bottom rule with an inset shadow, not a border: the global
-     `button:hover` repaints border-color to --accent, which would recolor a
-     real border-bottom on hover. A shadow is immune and looks identical. */
-  box-shadow: inset 0 -1px 0 var(--border);
+  border-bottom: 1px solid var(--border);
+}
+/* The global `button:hover` repaints border-color to --accent, which would
+   recolor the bottom rule on hover. Pin it back to --border — and keep it a
+   real border (not a box-shadow) so the rule's 1px keeps the toggle the same
+   height as the LURKER header / topic bar it lines up with. Specificity here
+   (0,3,0) beats the global `button:hover:not(:disabled)` (0,2,1). */
+.rail-toggle:hover:not(:disabled) {
+  border-color: var(--border);
 }
 
 .topic {
