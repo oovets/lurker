@@ -36,7 +36,13 @@
         <span class="last-seen" :title="sub.last_seen_at"
           >last seen {{ formatRelative(sub.last_seen_at) }}</span
         >
-        <button class="link danger" @click="onRemoveOther(sub)" :disabled="pushBusy">remove</button>
+        <IconButton
+          icon="fa-trash"
+          label="remove"
+          danger
+          :disabled="pushBusy"
+          @click="onRemoveOther(sub)"
+        />
       </li>
     </ul>
     <p v-else-if="pushSubsStore.loaded && thisClientEnabled" class="muted small">
@@ -233,6 +239,7 @@ import { useNetworksStore } from '../../stores/networks.js';
 import { formatRelative } from '../../utils/timestamp.js';
 import { getOption } from '../../utils/settingsRegistry.js';
 import { playSound } from '../../composables/useHighlightNotifier.js';
+import IconButton from '../IconButton.vue';
 import type { SettingValue, EnumOption } from '../../../../shared/settingsRegistry.js';
 import {
   isSupported as isPushSupported,

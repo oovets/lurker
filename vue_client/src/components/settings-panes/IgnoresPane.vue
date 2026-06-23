@@ -31,8 +31,10 @@
             {{ entry.mask ?? '*' }}
             <span class="muted small ignore-detail">{{ describe(entry) }}</span>
           </span>
-          <button class="link" @click="startEdit(entry)">edit</button>
-          <button class="link danger" @click="onRemove(entry)">remove</button>
+          <div class="row-actions">
+            <IconButton icon="fa-pen" label="edit" @click="startEdit(entry)" />
+            <IconButton icon="fa-trash" label="remove" danger @click="onRemove(entry)" />
+          </div>
         </li>
       </ul>
     </template>
@@ -191,6 +193,7 @@
 import { ref, reactive, computed } from 'vue';
 import { useNetworksStore } from '../../stores/networks.js';
 import { useIgnoresStore, type IgnoreEntryWithNetwork } from '../../stores/ignores.js';
+import IconButton from '../IconButton.vue';
 import type { IgnoreRule } from '../../utils/ignoreMatch.js';
 import { durationToExpiry, type IgnorePatternKind } from '../../../../shared/parseIgnore.js';
 import { CANONICAL_ORDER } from '../../../../shared/ignoreLevels.js';

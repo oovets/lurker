@@ -96,6 +96,13 @@
 .settings-pane .device .last-seen {
   color: var(--fg-muted);
 }
+/* Per-row action cluster (edit/remove icon buttons, optional toggle) kept in one
+   grid cell so they stay on a single line within the .device grid. */
+.settings-pane .row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
 
 .settings-pane .hl-sep {
   border: none;

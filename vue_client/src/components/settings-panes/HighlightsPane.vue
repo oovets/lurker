@@ -33,18 +33,37 @@
             {{ entry.mask ?? entry.pattern ?? '*' }}
             <span class="muted small hl-detail">{{ describe(entry) }}</span>
           </span>
-          <label class="ck inline" title="enabled">
-            <input
-              type="checkbox"
-              :checked="entry.enabled"
-              @change="toggleEnabled(entry, ($event.target as HTMLInputElement).checked)"
+          <div class="row-actions">
+            <button
+              type="button"
+              class="toggle"
+              :class="{ on: entry.enabled }"
+              :aria-pressed="entry.enabled"
+              :title="entry.enabled ? 'enabled — click to disable' : 'disabled — click to enable'"
+              :aria-label="entry.enabled ? 'enabled' : 'disabled'"
+              @click="toggleEnabled(entry, !entry.enabled)"
+            >
+              <i
+                :class="['fa-solid', entry.enabled ? 'fa-toggle-on' : 'fa-toggle-off']"
+                aria-hidden="true"
+              ></i>
+            </button>
+            <!-- Auto-managed (network nick) rules track your nick — only the
+                 enabled toggle applies, so edit/remove show disabled. -->
+            <IconButton
+              icon="fa-pen"
+              label="edit"
+              :disabled="entry.auto_managed"
+              @click="startEdit(entry)"
             />
-            <span>{{ entry.enabled ? 'on' : 'off' }}</span>
-          </label>
-          <button v-if="!entry.auto_managed" class="link" @click="startEdit(entry)">edit</button>
-          <button v-if="!entry.auto_managed" class="link danger" @click="onRemove(entry)">
-            remove
-          </button>
+            <IconButton
+              icon="fa-trash"
+              label="remove"
+              danger
+              :disabled="entry.auto_managed"
+              @click="onRemove(entry)"
+            />
+          </div>
         </li>
       </ul>
     </template>
@@ -165,6 +184,7 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { useNetworksStore } from '../../stores/networks.js';
 import { useHighlightRulesStore } from '../../stores/highlightRules.js';
 import type { HighlightRule } from '../../stores/highlightRules.js';
+import IconButton from '../IconButton.vue';
 
 type RuleKind = 'substr' | 'full' | 'glob' | 'regex';
 
@@ -423,8 +443,19 @@ async function onRemove(entry: HighlightRule) {
 .lock {
   margin-right: var(--space-1);
 }
-.ck.inline {
-  margin-left: auto;
+/* Enabled toggle: muted when off, accent when on; the glyph (toggle-on/off)
+   plus aria-pressed carry the state. */
+.toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  color: var(--fg-muted);
+}
+.toggle.on {
+  color: var(--accent);
 }
 .rule-form {
   display: flex;
