@@ -414,6 +414,77 @@ describe('addPeerWatch live presence seed (#302)', () => {
   });
 });
 
+describe('nick-regain MONITOR teardown gating (#384)', () => {
+  function makeConn(): IrcConnection {
+    return new IrcConnection({
+      network: {
+        id: 1,
+        user_id: 1,
+        name: 'n',
+        host: 'irc.example.test',
+        port: 6697,
+        tls: 1,
+        trusted_certificates: 1,
+        nick: 'nick',
+        username: null,
+        realname: null,
+        server_password: null,
+        autoconnect: 1,
+        sasl_account: null,
+        sasl_password: null,
+        connect_commands: null,
+        position: 0,
+        created_at: new Date().toISOString(),
+      },
+      onEvent: () => {},
+    });
+  }
+
+  // Repro for #384: we connected under a fallback nick (the configured nick was
+  // taken, so a regain watch is armed) on a server with no MONITOR, then the
+  // user changes nick. The self-nick handler tears the regain watch down — but
+  // the matching `MONITOR +` was never sent (it's gated on useMonitor), so a
+  // blind `MONITOR -` here only earns a 421 "MONITOR Unknown command" banner.
+  it('sends no MONITOR - on a self-nick change when the server lacks MONITOR', () => {
+    const conn = makeConn();
+    conn.useMonitor = false;
+    conn.state = 'connected';
+    conn.regainNick = 'nick'; // the primary we still want back
+    conn.pendingRegainSetup = true;
+    conn.client.user.nick = 'nick1'; // currently on the fallback
+    conn.publish = vi.fn<(event: unknown) => void>(); // we assert on the wire, not the buffer
+    const raw = vi.fn<(...args: unknown[]) => void>();
+    conn.client.raw = raw;
+
+    // Reclaim the primary: old nick 'nick1' (our current), new nick 'nick'.
+    conn.client.emit('nick', { nick: 'nick1', new_nick: 'nick' });
+
+    expect(raw.mock.calls.flat(Infinity).join(' ')).not.toContain('MONITOR');
+    expect(conn.regainNick).toBeNull(); // watch state is still cleared
+  });
+
+  // On a MONITOR-capable server the teardown must still fire, releasing the
+  // server-side watch for the (now reclaimed) regain nick.
+  it('still sends MONITOR - on a self-nick change when the server supports MONITOR', () => {
+    const conn = makeConn();
+    conn.useMonitor = true;
+    conn.monitorLimit = 100;
+    conn.state = 'connected';
+    conn.regainNick = 'nick';
+    conn.pendingRegainSetup = false;
+    conn.client.user.nick = 'nick1';
+    conn.publish = vi.fn<(event: unknown) => void>();
+    const raw = vi.fn<(...args: unknown[]) => void>();
+    conn.client.raw = raw;
+
+    conn.client.emit('nick', { nick: 'nick1', new_nick: 'nick' });
+
+    // removeMonitor() emits the line as args: ['MONITOR', '-', 'nick'].
+    expect(raw.mock.calls.flat(Infinity).join(' ')).toContain('MONITOR - nick');
+    expect(conn.regainNick).toBeNull();
+  });
+});
+
 describe('formatSocketCloseErrorMessage', () => {
   const where = 'irc.example.test:6697';
 

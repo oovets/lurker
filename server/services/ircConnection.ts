@@ -1172,10 +1172,17 @@ export class IrcConnection {
         // silently). Either way the watch is now stale.
         if (this.regainNick) {
           const reclaimed = newLower === this.regainNick.toLowerCase();
-          try {
-            this.client.removeMonitor(this.regainNick);
-          } catch (_) {
-            /* ignore */
+          // Only tear down a watch we could actually have placed. The regain
+          // `MONITOR +` is gated on `useMonitor` (set from ISUPPORT), so on a
+          // server without MONITOR — or before ISUPPORT lands — nothing was
+          // ever watched and a blind `MONITOR -` here just draws a 421
+          // "MONITOR Unknown command" (#384). Skipping it is a true no-op.
+          if (this.useMonitor) {
+            try {
+              this.client.removeMonitor(this.regainNick);
+            } catch (_) {
+              /* ignore */
+            }
           }
           if (reclaimed) {
             this.publish({
