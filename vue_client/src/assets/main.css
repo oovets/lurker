@@ -241,14 +241,11 @@ a {
 
 /* Coloured nick mentions inside message text. Clickable to open the member
    menu (Reply, whois, DM, …), the same affordance as the nicklist. The nick
-   keeps its inline colour; pointer + hover underline are the only added cues.
-   Left selectable so the message text stays copyable. */
+   keeps its inline colour; a pointer cursor is the only added cue — no hover
+   underline, to match the author and event-line nicks. Left selectable so the
+   message text stays copyable. */
 .msg-nick {
   cursor: pointer;
-}
-.msg-nick:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 /* Button language (#355): accent = actionable, gray = disabled. Buttons carry
