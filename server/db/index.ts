@@ -555,6 +555,96 @@ function migrate() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_system_messages_recent ON system_messages(user_id, id);
+
+    -- RPE2E end-to-end-encryption keyring (issue #382). Secrets — the identity
+    -- private key and the session keys — are stored as secretCrypto envelopes
+    -- (TEXT, the same lk1.* at-rest scheme as network credentials); public
+    -- material (pubkeys, fingerprints) is BLOB. The identity is per-ACCOUNT (one
+    -- keypair shared across a user's networks, so a peer verifies the fingerprint
+    -- once); everything else is scoped per (user, network) since IRC handles and
+    -- channels are network-specific. See server/db/e2e.ts.
+    CREATE TABLE IF NOT EXISTS e2e_identity (
+      user_id INTEGER PRIMARY KEY,
+      pubkey BLOB NOT NULL,
+      privkey TEXT NOT NULL,
+      fingerprint BLOB NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS e2e_peers (
+      user_id INTEGER NOT NULL,
+      network_id INTEGER NOT NULL,
+      fingerprint BLOB NOT NULL,
+      pubkey BLOB NOT NULL,
+      last_handle TEXT,
+      last_nick TEXT,
+      first_seen INTEGER NOT NULL,
+      last_seen INTEGER NOT NULL,
+      global_status TEXT NOT NULL DEFAULT 'pending',
+      PRIMARY KEY (user_id, network_id, fingerprint),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_e2e_peers_handle
+      ON e2e_peers(user_id, network_id, last_handle);
+    CREATE TABLE IF NOT EXISTS e2e_incoming_sessions (
+      user_id INTEGER NOT NULL,
+      network_id INTEGER NOT NULL,
+      handle TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      fingerprint BLOB NOT NULL,
+      sk TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, network_id, handle, channel),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_e2e_incoming_channel
+      ON e2e_incoming_sessions(user_id, network_id, channel);
+    CREATE TABLE IF NOT EXISTS e2e_outgoing_sessions (
+      user_id INTEGER NOT NULL,
+      network_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      sk TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      pending_rotation INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, network_id, channel),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS e2e_channel_config (
+      user_id INTEGER NOT NULL,
+      network_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      mode TEXT NOT NULL DEFAULT 'normal',
+      PRIMARY KEY (user_id, network_id, channel),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS e2e_autotrust (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      network_id INTEGER NOT NULL,
+      scope TEXT NOT NULL,
+      handle_pattern TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE (user_id, network_id, scope, handle_pattern),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS e2e_outgoing_recipients (
+      user_id INTEGER NOT NULL,
+      network_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      handle TEXT NOT NULL,
+      fingerprint BLOB NOT NULL,
+      first_sent_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, network_id, channel, handle),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
+    );
   `);
 }
 
