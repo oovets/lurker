@@ -559,28 +559,34 @@ function migrate() {
     -- RPE2E end-to-end-encryption keyring (issue #382). Secrets — the identity
     -- private key and the session keys — are stored as secretCrypto envelopes
     -- (TEXT, the same lk1.* at-rest scheme as network credentials); public
-    -- material (pubkeys, fingerprints) is BLOB. The identity is per-ACCOUNT (one
-    -- keypair shared across a user's networks, so a peer verifies the fingerprint
-    -- once); everything else is scoped per (user, network) since IRC handles and
-    -- channels are network-specific. See server/db/e2e.ts.
+    -- material (pubkeys, fingerprints) is BLOB with a length CHECK so a
+    -- truncated/corrupt restore fails loud here, not deep in crypto. The
+    -- identity is per-ACCOUNT (one keypair shared across a user's networks, so a
+    -- peer verifies the fingerprint once); everything else is scoped per (user,
+    -- network) since IRC handles and channels are network-specific. IRC-target
+    -- columns (handle / channel / scope / last_handle / last_nick) are
+    -- COLLATE NOCASE per house style — servers send inconsistent casing, so the
+    -- composite PKs dedupe and lookups fold case (the E2eManager still owns the
+    -- exact on-the-wire casing that goes into the AAD). See server/db/e2e.ts.
     CREATE TABLE IF NOT EXISTS e2e_identity (
       user_id INTEGER PRIMARY KEY,
-      pubkey BLOB NOT NULL,
+      pubkey BLOB NOT NULL CHECK (length(pubkey) = 32),
       privkey TEXT NOT NULL,
-      fingerprint BLOB NOT NULL,
+      fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 16),
       created_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS e2e_peers (
       user_id INTEGER NOT NULL,
       network_id INTEGER NOT NULL,
-      fingerprint BLOB NOT NULL,
-      pubkey BLOB NOT NULL,
-      last_handle TEXT,
-      last_nick TEXT,
+      fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 16),
+      pubkey BLOB NOT NULL CHECK (length(pubkey) = 32),
+      last_handle TEXT COLLATE NOCASE,
+      last_nick TEXT COLLATE NOCASE,
       first_seen INTEGER NOT NULL,
       last_seen INTEGER NOT NULL,
-      global_status TEXT NOT NULL DEFAULT 'pending',
+      global_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (global_status IN ('pending', 'trusted', 'revoked')),
       PRIMARY KEY (user_id, network_id, fingerprint),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
@@ -590,11 +596,12 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS e2e_incoming_sessions (
       user_id INTEGER NOT NULL,
       network_id INTEGER NOT NULL,
-      handle TEXT NOT NULL,
-      channel TEXT NOT NULL,
-      fingerprint BLOB NOT NULL,
+      handle TEXT NOT NULL COLLATE NOCASE,
+      channel TEXT NOT NULL COLLATE NOCASE,
+      fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 16),
       sk TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'trusted', 'revoked')),
       created_at INTEGER NOT NULL,
       PRIMARY KEY (user_id, network_id, handle, channel),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -605,7 +612,7 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS e2e_outgoing_sessions (
       user_id INTEGER NOT NULL,
       network_id INTEGER NOT NULL,
-      channel TEXT NOT NULL,
+      channel TEXT NOT NULL COLLATE NOCASE,
       sk TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       pending_rotation INTEGER NOT NULL DEFAULT 0,
@@ -616,9 +623,10 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS e2e_channel_config (
       user_id INTEGER NOT NULL,
       network_id INTEGER NOT NULL,
-      channel TEXT NOT NULL,
+      channel TEXT NOT NULL COLLATE NOCASE,
       enabled INTEGER NOT NULL DEFAULT 0,
-      mode TEXT NOT NULL DEFAULT 'normal',
+      mode TEXT NOT NULL DEFAULT 'normal'
+        CHECK (mode IN ('auto-accept', 'normal', 'quiet')),
       PRIMARY KEY (user_id, network_id, channel),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
@@ -627,7 +635,7 @@ function migrate() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       network_id INTEGER NOT NULL,
-      scope TEXT NOT NULL,
+      scope TEXT NOT NULL COLLATE NOCASE,
       handle_pattern TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       UNIQUE (user_id, network_id, scope, handle_pattern),
@@ -637,14 +645,16 @@ function migrate() {
     CREATE TABLE IF NOT EXISTS e2e_outgoing_recipients (
       user_id INTEGER NOT NULL,
       network_id INTEGER NOT NULL,
-      channel TEXT NOT NULL,
-      handle TEXT NOT NULL,
-      fingerprint BLOB NOT NULL,
+      channel TEXT NOT NULL COLLATE NOCASE,
+      handle TEXT NOT NULL COLLATE NOCASE,
+      fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 16),
       first_sent_at INTEGER NOT NULL,
       PRIMARY KEY (user_id, network_id, channel, handle),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (network_id) REFERENCES networks(id) ON DELETE CASCADE
     );
+    CREATE INDEX IF NOT EXISTS idx_e2e_recipients_handle
+      ON e2e_outgoing_recipients(user_id, network_id, handle);
   `);
 }
 

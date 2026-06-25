@@ -21,6 +21,7 @@ let userId: number;
 let otherUserId: number;
 let netA: number;
 let netB: number;
+let otherNet: number;
 
 const key = (b: number) => new Uint8Array(32).fill(b);
 const fp = (b: number) => new Uint8Array(16).fill(b);
@@ -37,6 +38,7 @@ beforeAll(async () => {
     createNetwork(uid, { name, host: 'h', port: 6697, tls: true, nick: 'n' })!.id;
   netA = mkNet(userId, 'libera');
   netB = mkNet(userId, 'oftc');
+  otherNet = mkNet(otherUserId, 'libera');
 });
 
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -109,6 +111,20 @@ describe('peers', () => {
     const fps = e2e.listPeers(userId, netA).map((p) => p.fingerprint[0]);
     expect(fps).toEqual([11, 12]);
   });
+
+  it('does not downgrade global_status on a routine re-upsert; setPeerStatus is explicit', () => {
+    e2e.upsertPeer(userId, netA, { ...peer(15, '~t@h', 10), globalStatus: 'trusted' });
+    // A routine re-sighting refreshing last_handle/last_seen passes the caller's
+    // default 'pending' — must NOT clobber the trusted status.
+    e2e.upsertPeer(userId, netA, peer(15, '~t@h2', 20));
+    let got = e2e.getPeerByFingerprint(userId, netA, fp(15))!;
+    expect(got.globalStatus).toBe('trusted');
+    expect(got.lastHandle).toBe('~t@h2');
+    // Explicit change still works.
+    e2e.setPeerStatus(userId, netA, fp(15), 'revoked');
+    got = e2e.getPeerByFingerprint(userId, netA, fp(15))!;
+    expect(got.globalStatus).toBe('revoked');
+  });
 });
 
 describe('incoming sessions + strict TOFU', () => {
@@ -174,6 +190,12 @@ describe('outgoing sessions', () => {
     const got = e2e.getOutgoingSession(userId, netA, '#out')!;
     expect(got.sk).toEqual(key(50));
     expect(got.pendingRotation).toBe(false);
+    const raw = db
+      .prepare(
+        `SELECT sk FROM e2e_outgoing_sessions WHERE user_id=? AND network_id=? AND channel=?`,
+      )
+      .get(userId, netA, '#out') as { sk: string };
+    expect(raw.sk.startsWith('lk1.')).toBe(true); // sealed, not raw hex
   });
 
   it('marks and clears pending rotation', () => {
@@ -242,13 +264,21 @@ describe('outgoing recipients', () => {
 });
 
 describe('scoping isolation', () => {
-  it('keeps (user, network) data from leaking across networks or tenants', () => {
+  it('does not leak across networks (same user)', () => {
     e2e.setChannelConfig(userId, netA, { channel: '#iso', enabled: true, mode: 'normal' });
-    // same user, different network
     expect(e2e.getChannelConfig(userId, netB, '#iso')).toBeNull();
-    // different user entirely (would need their own network, but the scope check
-    // is on user_id + network_id, so netA under otherUserId yields nothing)
-    expect(e2e.getChannelConfig(otherUserId, netA, '#iso')).toBeNull();
+  });
+
+  it('does not leak across tenants (the user_id predicate actually bites)', () => {
+    // Seed a row under a DIFFERENT tenant's own network, then confirm our user
+    // can't read it — if a query dropped its user_id predicate this would fail.
+    e2e.setChannelConfig(otherUserId, otherNet, {
+      channel: '#tenant',
+      enabled: true,
+      mode: 'quiet',
+    });
+    expect(e2e.getChannelConfig(otherUserId, otherNet, '#tenant')).not.toBeNull();
+    expect(e2e.getChannelConfig(userId, otherNet, '#tenant')).toBeNull();
   });
 });
 
@@ -265,5 +295,88 @@ describe('glob + enum parsing (pure helpers)', () => {
     expect(e2e.parseTrustStatus('bogus')).toBe('pending');
     expect(e2e.parseChannelMode('bogus')).toBe('normal');
     expect(e2e.parseChannelMode('auto')).toBe('auto-accept'); // alias
+  });
+});
+
+describe('review hardening', () => {
+  const sess = (handle: string, channel: string, fpb: number, status: 'pending' | 'trusted') => ({
+    handle,
+    channel,
+    fingerprint: fp(fpb),
+    sk: key(fpb),
+    status,
+    createdAt: 1,
+  });
+
+  it('folds IRC target case — strict TOFU catches a case-flipped channel (C1)', () => {
+    e2e.installIncomingSessionStrict(userId, netA, sess('~cf@h', '#Case', 60, 'pending'));
+    // Same logical channel, different casing, DIFFERENT fingerprint: must be a
+    // handle mismatch, not a silent second row.
+    expect(() =>
+      e2e.installIncomingSessionStrict(userId, netA, sess('~cf@h', '#case', 61, 'pending')),
+    ).toThrow(/handle mismatch/);
+    // Case-flipped lookup finds the one row.
+    expect(e2e.getIncomingSession(userId, netA, '~CF@h', '#CASE')!.fingerprint).toEqual(fp(60));
+  });
+
+  it('folds case for channel-config lookups (C1)', () => {
+    e2e.setChannelConfig(userId, netA, { channel: '#FoldMe', enabled: true, mode: 'auto-accept' });
+    expect(e2e.getChannelConfig(userId, netA, '#foldme')!.enabled).toBe(true);
+  });
+
+  it('rejects a wrong-length key on the write side (C3)', () => {
+    expect(() => e2e.setOutgoingSession(userId, netA, '#bad', new Uint8Array(16), 1)).toThrow(
+      /key must be 32 bytes/,
+    );
+  });
+
+  it('enforces blob length at the schema via CHECK (C3)', () => {
+    expect(() =>
+      e2e.upsertPeer(userId, netA, {
+        fingerprint: new Uint8Array(15),
+        pubkey: key(1),
+        lastHandle: null,
+        lastNick: null,
+        firstSeen: 1,
+        lastSeen: 1,
+        globalStatus: 'pending',
+      }),
+    ).toThrow(/constraint/);
+  });
+
+  it('skips an unreadable trusted session instead of dropping the channel (C6)', () => {
+    e2e.setIncomingSession(userId, netA, sess('~ok@h', '#mix', 62, 'trusted'));
+    e2e.setIncomingSession(userId, netA, sess('~bad@h', '#mix', 63, 'trusted'));
+    db.prepare(
+      `UPDATE e2e_incoming_sessions SET sk = 'not-decryptable'
+       WHERE user_id=? AND network_id=? AND handle=? AND channel=?`,
+    ).run(userId, netA, '~bad@h', '#mix');
+    expect(e2e.listTrustedSessionsForChannel(userId, netA, '#mix').map((s) => s.handle)).toEqual([
+      '~ok@h',
+    ]);
+  });
+
+  it('backfill re-seals a plaintext-hex secret from a keyless window (C2)', () => {
+    // Simulate a keyless write: raw plaintext hex straight into the column.
+    const rawHex = Buffer.from(key(70)).toString('hex');
+    db.prepare(
+      `INSERT INTO e2e_identity (user_id, pubkey, privkey, fingerprint, created_at) VALUES (?, ?, ?, ?, 1)`,
+    ).run(otherUserId, Buffer.from(key(70)), rawHex, Buffer.from(fp(70)));
+    const before = db
+      .prepare(`SELECT privkey FROM e2e_identity WHERE user_id=?`)
+      .get(otherUserId) as {
+      privkey: string;
+    };
+    expect(before.privkey.startsWith('lk1.')).toBe(false);
+
+    expect(e2e.backfillEncryptE2eSecrets().encrypted).toBeGreaterThanOrEqual(1);
+
+    const after = db
+      .prepare(`SELECT privkey FROM e2e_identity WHERE user_id=?`)
+      .get(otherUserId) as {
+      privkey: string;
+    };
+    expect(after.privkey.startsWith('lk1.')).toBe(true);
+    expect(e2e.loadIdentity(otherUserId)!.privkey).toEqual(key(70)); // still round-trips
   });
 });

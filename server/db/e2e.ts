@@ -13,8 +13,9 @@
 // module is pure storage + CRUD; handshake orchestration, trust policy, and the
 // rate limiter live in the (not-yet-built) E2eManager.
 
+import { globToRegexSource } from '../../shared/textMatch.js';
 import { E2eError } from '../services/e2e/errors.js';
-import { decryptSecret, encryptSecret } from '../utils/secretCrypto.js';
+import { decryptSecret, encryptSecret, hasSecretKey, isEncrypted } from '../utils/secretCrypto.js';
 import db from './index.js';
 
 // ─── types ───────────────────────────────────────────────────────────────────
@@ -83,18 +84,45 @@ export class HandleMismatchError extends E2eError {
 
 // ─── value mapping ───────────────────────────────────────────────────────────
 
+const KEY_LEN = 32;
+
 const toBlob = (u8: Uint8Array): Buffer => Buffer.from(u8);
-const fromBlob = (b: unknown): Uint8Array => new Uint8Array(b as Buffer);
+
+/** Wrap a DB blob as bytes, asserting the expected length so a truncated /
+ *  corrupt restore fails loud here instead of deep in crypto (mirrors the
+ *  reference's read-time length guards). */
+function fromBlob(b: unknown, len: number): Uint8Array {
+  const u8 = new Uint8Array(b as Buffer);
+  if (u8.length !== len) {
+    throw new E2eError('keyring', `expected ${len}-byte blob, got ${u8.length}`);
+  }
+  return u8;
+}
 
 /** Seal a raw key to a secretCrypto envelope (hex → encrypted TEXT). */
 function sealKey(key: Uint8Array): string {
+  if (key.length !== KEY_LEN) {
+    throw new E2eError('keyring', `key must be ${KEY_LEN} bytes, got ${key.length}`);
+  }
   return encryptSecret(Buffer.from(key).toString('hex'))!;
 }
-/** Open a sealed key back to raw bytes. */
-function openKey(stored: string): Uint8Array {
-  const hex = decryptSecret(stored);
+
+/** Open a sealed key back to raw bytes. Every failure surfaces as
+ *  `E2eError('keyring')` so callers can branch on `kind` — including an
+ *  undecryptable envelope after a LURKER_SECRET_KEY change (DR rebuild). */
+function openKey(stored: string, len = KEY_LEN): Uint8Array {
+  let hex: string | null;
+  try {
+    hex = decryptSecret(stored);
+  } catch (err) {
+    throw new E2eError('keyring', `failed to unseal key: ${(err as Error).message}`);
+  }
   if (!hex) throw new E2eError('keyring', 'sealed key is empty or unreadable');
-  return new Uint8Array(Buffer.from(hex, 'hex'));
+  const u8 = new Uint8Array(Buffer.from(hex, 'hex'));
+  if (u8.length !== len) {
+    throw new E2eError('keyring', `sealed key wrong length: expected ${len}, got ${u8.length}`);
+  }
+  return u8;
 }
 
 // Lenient enum parsing, mirroring repartee (unknown → safe default; `auto` is an
@@ -137,9 +165,9 @@ export function loadIdentity(userId: number): IdentityRow | null {
     | undefined;
   if (!r) return null;
   return {
-    pubkey: fromBlob(r.pubkey),
+    pubkey: fromBlob(r.pubkey, 32),
     privkey: openKey(r.privkey),
-    fingerprint: fromBlob(r.fingerprint),
+    fingerprint: fromBlob(r.fingerprint, 16),
     createdAt: r.created_at,
   };
 }
@@ -153,8 +181,15 @@ const upsertPeerStmt = db.prepare(`
     (@userId, @networkId, @fingerprint, @pubkey, @lastHandle, @lastNick, @firstSeen, @lastSeen, @globalStatus)
   ON CONFLICT(user_id, network_id, fingerprint) DO UPDATE SET
     last_handle = excluded.last_handle, last_nick = excluded.last_nick,
-    last_seen = excluded.last_seen, global_status = excluded.global_status
+    last_seen = excluded.last_seen
 `);
+// global_status is deliberately NOT touched on conflict — a routine re-sighting
+// (refresh last_seen/last_handle) must never downgrade a peer the user marked
+// trusted back to the caller's default. Explicit trust changes go through
+// setPeerStatus.
+const setPeerStatusStmt = db.prepare(
+  `UPDATE e2e_peers SET global_status = ? WHERE user_id = ? AND network_id = ? AND fingerprint = ?`,
+);
 const getPeerByFpStmt = db.prepare(
   `SELECT * FROM e2e_peers WHERE user_id = ? AND network_id = ? AND fingerprint = ?`,
 );
@@ -180,8 +215,8 @@ interface PeerRow {
 }
 function mapPeer(r: PeerRow): PeerRecord {
   return {
-    fingerprint: fromBlob(r.fingerprint),
-    pubkey: fromBlob(r.pubkey),
+    fingerprint: fromBlob(r.fingerprint, 16),
+    pubkey: fromBlob(r.pubkey, 32),
     lastHandle: r.last_handle,
     lastNick: r.last_nick,
     firstSeen: r.first_seen,
@@ -202,6 +237,17 @@ export function upsertPeer(userId: number, networkId: number, peer: PeerRecord):
     lastSeen: peer.lastSeen,
     globalStatus: peer.globalStatus,
   });
+}
+
+/** Set a peer's global trust status (the explicit trust/revoke path; the
+ *  routine upsert never changes it). */
+export function setPeerStatus(
+  userId: number,
+  networkId: number,
+  fingerprint: Uint8Array,
+  status: TrustStatus,
+): void {
+  setPeerStatusStmt.run(status, userId, networkId, toBlob(fingerprint));
 }
 
 export function getPeerByFingerprint(
@@ -287,7 +333,7 @@ function mapIncoming(r: IncomingRow): IncomingSession {
   return {
     handle: r.handle,
     channel: r.channel,
-    fingerprint: fromBlob(r.fingerprint),
+    fingerprint: fromBlob(r.fingerprint, 16),
     sk: openKey(r.sk),
     status: parseTrustStatus(r.status),
     createdAt: r.created_at,
@@ -371,15 +417,25 @@ export function deleteIncomingSessionsForHandle(
   return deleteIncomingForHandleStmt.run(userId, networkId, handle).changes;
 }
 
-/** Trusted incoming sessions for a channel (the decrypt hot path). */
+/** Trusted incoming sessions for a channel (the decrypt hot path). A single
+ *  unreadable row (corrupt blob, or an envelope undecryptable after a key
+ *  rotation) is skipped, not allowed to drop the whole channel's decryption. */
 export function listTrustedSessionsForChannel(
   userId: number,
   networkId: number,
   channel: string,
 ): IncomingSession[] {
-  return (listTrustedForChannelStmt.all(userId, networkId, channel) as IncomingRow[]).map(
-    mapIncoming,
-  );
+  const out: IncomingSession[] = [];
+  for (const r of listTrustedForChannelStmt.all(userId, networkId, channel) as IncomingRow[]) {
+    try {
+      out.push(mapIncoming(r));
+    } catch (err) {
+      console.warn(
+        `e2e keyring: skipping unreadable incoming session ${r.handle}/${r.channel}: ${(err as Error).message}`,
+      );
+    }
+  }
+  return out;
 }
 
 export function listIncomingSessions(userId: number, networkId: number): IncomingSession[] {
@@ -566,30 +622,11 @@ export function autotrustMatches(
   return rows.some((r) => globMatchCi(r.handle_pattern, handle));
 }
 
-/** Minimal case-insensitive glob: `*` matches any run, `?` one char, else literal. */
+/** Whole-string, case-insensitive glob (`*` any run, `?` one char) via the
+ *  shared `globToRegexSource` — one source of truth for IRC wildcard semantics,
+ *  and surrogate-safe (the regex `u` flag matches by code point). */
 export function globMatchCi(pattern: string, input: string): boolean {
-  const p = pattern.toLowerCase();
-  const s = input.toLowerCase();
-  let pi = 0;
-  let si = 0;
-  let star = -1;
-  let mark = 0;
-  while (si < s.length) {
-    if (pi < p.length && (p[pi] === '?' || p[pi] === s[si])) {
-      pi++;
-      si++;
-    } else if (pi < p.length && p[pi] === '*') {
-      star = pi++;
-      mark = si;
-    } else if (star !== -1) {
-      pi = star + 1;
-      si = ++mark;
-    } else {
-      return false;
-    }
-  }
-  while (pi < p.length && p[pi] === '*') pi++;
-  return pi === p.length;
+  return new RegExp(`^${globToRegexSource(pattern)}$`, 'iu').test(input);
 }
 
 // ─── outgoing recipients (for lazy-rotate distribution) ──────────────────────
@@ -644,7 +681,7 @@ export function listOutgoingRecipients(
       handle: string;
       fingerprint: Buffer;
     }>
-  ).map((r) => ({ handle: r.handle, fingerprint: fromBlob(r.fingerprint) }));
+  ).map((r) => ({ handle: r.handle, fingerprint: fromBlob(r.fingerprint, 16) }));
 }
 
 export function removeOutgoingRecipient(
@@ -662,4 +699,49 @@ export function deleteOutgoingRecipientsForHandle(
   handle: string,
 ): number {
   return deleteRecipientsForHandleStmt.run(userId, networkId, handle).changes;
+}
+
+// ─── at-rest backfill ────────────────────────────────────────────────────────
+
+// (table, secret-column) pairs holding sealed key material. All are rowid
+// tables, so the re-seal can address rows by rowid regardless of their
+// composite PK.
+const E2E_SEALED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['e2e_identity', 'privkey'],
+  ['e2e_incoming_sessions', 'sk'],
+  ['e2e_outgoing_sessions', 'sk'],
+];
+
+/**
+ * Re-seal any e2e secret columns left as plaintext hex from a keyless window
+ * (the documented self-host→hosted migration, or a key added post-hoc). The
+ * lazy on-write seal only fires at creation, so without this a privkey/sk
+ * written keyless would stay cleartext in SQLite — and Litestream ships that to
+ * R2 ([[project_cell_secret_key]] is the whole reason these are sealed). The
+ * analog of networks.ts::backfillEncryptNetworkSecrets; run once at boot. No-op
+ * without a key (every self-host), and the isEncrypted() guard skips already-
+ * sealed rows so a fully-sealed table does zero writes.
+ */
+export function backfillEncryptE2eSecrets(): { scanned: number; encrypted: number } {
+  if (!hasSecretKey()) return { scanned: 0, encrypted: 0 };
+  let scanned = 0;
+  let encrypted = 0;
+  const tx = db.transaction(() => {
+    for (const [table, col] of E2E_SEALED_COLUMNS) {
+      const rows = db.prepare(`SELECT rowid AS rid, ${col} AS v FROM ${table}`).all() as Array<{
+        rid: number;
+        v: string | null;
+      }>;
+      const update = db.prepare(`UPDATE ${table} SET ${col} = ? WHERE rowid = ?`);
+      for (const row of rows) {
+        scanned += 1;
+        if (typeof row.v === 'string' && row.v !== '' && !isEncrypted(row.v)) {
+          update.run(encryptSecret(row.v), row.rid);
+          encrypted += 1;
+        }
+      }
+    }
+  });
+  tx();
+  return { scanned, encrypted };
 }
