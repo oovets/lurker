@@ -18,7 +18,7 @@
 // name's leading space and the two \x01 SOH chars).
 import { lineBreak } from 'irc-framework/src/linebreak.js';
 
-const MESSAGE_MAX_BYTES = 350;
+export const MESSAGE_MAX_BYTES = 350;
 const ACTION_MAX_BYTES = MESSAGE_MAX_BYTES - ('ACTION'.length + 3);
 
 function chunk(text: string, bytes: number): string[] {
@@ -148,9 +148,21 @@ export function partitionMultiline(
       curBytes += lineBytes;
     } else {
       // Bigger than a whole batch on its own — tear it across batches at wire
-      // boundaries so no single batch exceeds the server's budget.
+      // boundaries so no single batch exceeds the server's budget. A wire
+      // message is ≤350B, so it can exceed maxBytes only if the server set
+      // max-bytes below a full wire line; re-chunk it smaller in that case so a
+      // batch never overflows. (The caller gates max-bytes < 350 to the legacy
+      // splitter, so this is a belt-and-suspenders.)
       flush();
-      for (const w of line) {
+      const pieces = line.flatMap((w) =>
+        byteLen(w.content) > limits.maxBytes
+          ? chunk(w.content, limits.maxBytes).map((c, i) => ({
+              content: c,
+              concat: i > 0 || w.concat,
+            }))
+          : [w],
+      );
+      for (const w of pieces) {
         const wBytes = byteLen(w.content);
         if (
           cur.length > 0 &&

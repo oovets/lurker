@@ -122,6 +122,9 @@ export function multilineMessageCount(
   limits: MultilineLimits | null | undefined,
 ): number {
   if (!text || !limits) return 0;
+  // A max-bytes below one full wire line can't carry a PRIVMSG in a batch — the
+  // server reports null limits for it, but guard here too so the count matches.
+  if (limits.maxBytes < MESSAGE_MAX_BYTES) return 0;
   const body = text.replace(/^(?:\r\n|\r|\n)+/, '').replace(/(?:\r\n|\r|\n)+$/, '');
   if (!/\r\n|\n|\r/.test(body)) return 0;
   let batches = 0;

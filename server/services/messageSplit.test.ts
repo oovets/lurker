@@ -255,6 +255,26 @@ describe('partitionMultiline', () => {
       expect(bytes).toBeLessThanOrEqual(380);
     }
   });
+
+  it('re-chunks wire content so no batch overflows even when max-bytes < 350', () => {
+    // Pathological server (max-bytes 100 < a full wire line): a single wire
+    // message is normally ≤350B, so it would overflow a 100B batch — partition
+    // must re-chunk it smaller. (Production gates this to legacy via
+    // multilineLimits, but the partition must never emit an over-budget batch.)
+    const batches = partitionMultiline('a'.repeat(900), { maxBytes: 100, maxLines: 24 });
+    expect(batches.length).toBeGreaterThan(1);
+    for (const batch of batches) {
+      const bytes = batch.reduce((n, w) => n + new TextEncoder().encode(w.content).byteLength, 0);
+      expect(bytes).toBeLessThanOrEqual(100);
+    }
+    // No content lost — joining every wire reconstructs the original line.
+    expect(
+      batches
+        .flat()
+        .map((w) => w.content)
+        .join(''),
+    ).toBe('a'.repeat(900));
+  });
 });
 
 describe('reassembleMultiline', () => {

@@ -1342,8 +1342,8 @@ describe('IRCv3 draft/multiline (#381)', () => {
 
     it('parses advertised max-bytes / max-lines and reports support', () => {
       const conn = makeConn();
-      enableMultiline(conn, 'max-bytes=100,max-lines=3');
-      expect(conn.multilineLimits()).toEqual({ maxBytes: 100, maxLines: 3 });
+      enableMultiline(conn, 'max-bytes=512,max-lines=3');
+      expect(conn.multilineLimits()).toEqual({ maxBytes: 512, maxLines: 3 });
       expect(conn.supportsMultiline()).toBe(true);
     });
 
@@ -1351,6 +1351,16 @@ describe('IRCv3 draft/multiline (#381)', () => {
       const conn = makeConn();
       enableMultiline(conn, '');
       expect(conn.multilineLimits()).toEqual({ maxBytes: 4096, maxLines: 24 });
+    });
+
+    it('reports no support when advertised max-bytes is below one wire line', () => {
+      // A server that can't hold a single 350B PRIVMSG in a batch isn't usefully
+      // multiline — null limits send the body via the legacy splitter instead of
+      // framing batches the server would FAIL+drop.
+      const conn = makeConn();
+      enableMultiline(conn, 'max-bytes=100,max-lines=24');
+      expect(conn.multilineLimits()).toBeNull();
+      expect(conn.supportsMultiline()).toBe(false);
     });
   });
 });

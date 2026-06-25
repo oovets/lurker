@@ -113,20 +113,26 @@ describe('multilineMessageCount', () => {
   });
 
   it('counts the batches when the body exceeds the byte budget', () => {
-    // Two 60-byte lines, max-bytes 100 → 2 batches (one line each).
+    // Two 300-byte lines, max-bytes 400 → 2 batches (600 > 400, one line each).
     expect(
-      multilineMessageCount(`${'a'.repeat(60)}\n${'b'.repeat(60)}`, {
-        maxBytes: 100,
+      multilineMessageCount(`${'a'.repeat(300)}\n${'b'.repeat(300)}`, {
+        maxBytes: 400,
         maxLines: 24,
       }),
     ).toBe(2);
   });
 
   it('counts utf-8 bytes, not characters, for the byte budget', () => {
-    // 15 × 4-byte emoji per line = 60 bytes each.
-    const body = `${'🔥'.repeat(15)}\n${'🔥'.repeat(15)}`;
-    expect(multilineMessageCount(body, { maxBytes: 100, maxLines: 24 })).toBe(2); // 120 > 100
-    expect(multilineMessageCount(body, { maxBytes: 200, maxLines: 24 })).toBe(1); // 120 ≤ 200
+    // 100 × 4-byte emoji per line = 400 bytes each, 800 total. If it counted
+    // characters (200) it would never split — bytes are what bind.
+    const body = `${'🔥'.repeat(100)}\n${'🔥'.repeat(100)}`;
+    expect(multilineMessageCount(body, { maxBytes: 500, maxLines: 24 })).toBe(2); // 800 > 500
+    expect(multilineMessageCount(body, { maxBytes: 900, maxLines: 24 })).toBe(1); // 800 ≤ 900
+  });
+
+  it('is 0 when max-bytes is below one wire line (matches the server gate)', () => {
+    expect(multilineMessageCount('a\nb', { maxBytes: 100, maxLines: 24 })).toBe(0);
+    expect(multilineMessageCount('a\nb', { maxBytes: 349, maxLines: 24 })).toBe(0);
   });
 
   it('ignores a trailing newline (matches splitMultiline edge-trim)', () => {

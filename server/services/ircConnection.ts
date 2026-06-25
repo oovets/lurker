@@ -26,7 +26,7 @@ import { findUserById } from '../db/users.js';
 import { isNodeMode } from '../utils/edition.js';
 import { deriveIdent } from '../utils/ident.js';
 import { registerIdent, unregisterIdent, isIdentdEnabled } from './identd.js';
-import { partitionMultiline, reassembleMultiline } from './messageSplit.js';
+import { MESSAGE_MAX_BYTES, partitionMultiline, reassembleMultiline } from './messageSplit.js';
 import type { MultilineLimits } from './messageSplit.js';
 import { randomBytes } from 'node:crypto';
 
@@ -2134,10 +2134,13 @@ export class IrcConnection {
   // the cap pair (e.g. Ergo), and reassemble the same from peers, with a clean
   // fallback to per-line splitting everywhere else.
 
-  // The server's advertised limits for a multiline batch, or null when the cap
-  // pair isn't negotiated. A dimension the server omits falls back to a
-  // conservative default so we never overflow it — worst case a very large
-  // paste takes the legacy split path instead of a batch.
+  // The server's advertised limits for a multiline batch, or null when multiline
+  // isn't usable here: the cap pair wasn't negotiated, or the advertised
+  // max-bytes is below one full wire line (MESSAGE_MAX_BYTES) and so can't carry
+  // a single PRIVMSG inside a batch — in which case the send path falls back to
+  // the legacy splitter rather than framing batches the server would FAIL+drop.
+  // An omitted dimension defaults conservatively; once non-null, the body always
+  // rides batches (spanning as many as the limits require), never the legacy path.
   multilineLimits(): MultilineLimits | null {
     const cap = this.client.network?.cap as
       | { enabled?: string[]; available?: Map<string, string> }
@@ -2154,6 +2157,7 @@ export class IrcConnection {
       if (key === 'max-bytes') maxBytes = n;
       else if (key === 'max-lines') maxLines = n;
     }
+    if (maxBytes < MESSAGE_MAX_BYTES) return null;
     return { maxBytes, maxLines };
   }
 
