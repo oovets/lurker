@@ -580,8 +580,12 @@ export class E2eManager {
     // reject a repeat so a captured REKEY can't be re-injected to re-install a
     // superseded key. Checked AFTER signature verify (an unsigned packet can't
     // poison the cache) and BEFORE any state change. There's no ts field on a
-    // REKEY, so this is a nonce-LRU, not a skew window. See REKEY_REPLAY_TTL_MS.
-    const replayKey = `${this.peerKey(userId, networkId, senderHandle)}:${b64(rekey.nonce)}`;
+    // REKEY, so this is a nonce-LRU, not a skew window. Scoped by CHANNEL too: a
+    // REKEY only installs a key for its own channel (the channel is in the signed
+    // payload + the HKDF wrap info), so replay only matters per-channel and the
+    // scope avoids a cross-channel nonce collision dropping a legit REKEY. See
+    // REKEY_REPLAY_TTL_MS.
+    const replayKey = `${this.peerKey(userId, networkId, senderHandle)}:${rekey.channel.toLowerCase()}:${b64(rekey.nonce)}`;
     if (!this.rekeyReplay.observe(replayKey, REKEY_REPLAY_TTL_MS)) return { replies: [] };
 
     const fp = fingerprint(rekey.pubkey);
@@ -1322,7 +1326,13 @@ export class E2eManager {
       }
       try {
         const body = this.buildRekeyBody(userId, networkId, channel, peer.pubkey, freshSk);
-        sends.push({ channel, targetHandle: r.handle, body });
+        // Address the REKEY to the peer's CURRENT pinned handle (peer is looked up
+        // by the stable fingerprint), not the recipient row's snapshot handle —
+        // the row handle can lag a handle change and fail nickForHandle, orphaning
+        // the peer. They're in sync today (a reverify drops stale recipient rows),
+        // but this is the right semantic and survives future drift. Fall back to
+        // the row handle.
+        sends.push({ channel, targetHandle: peer.lastHandle ?? r.handle, body });
       } catch (err) {
         console.warn(`e2e rekey build for ${r.handle} on ${channel}: ${(err as Error).message}`);
       }
