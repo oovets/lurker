@@ -557,6 +557,17 @@ export class E2eManager {
     keyring.setPeerStatus(userId, networkId, fp, 'trusted');
 
     if (!this.installIncoming(userId, networkId, senderHandle, rsp.channel, fp, sk, now)) {
+      // Install-time second line of defense: the session row for this (handle,
+      // channel) is pinned to a different fingerprint. Stash the new (already
+      // sig-verified) pubkey so `/e2e reverify` can re-pin it in place.
+      this.stashKeyChange(
+        userId,
+        networkId,
+        senderHandle,
+        'fingerprint-changed',
+        rsp.pubkey,
+        rsp.channel,
+      );
       return {
         replies: [],
         notice: this.tofuWarning(senderHandle, 'fingerprint-changed', fp),
@@ -610,12 +621,16 @@ export class E2eManager {
     const change = this.classifyPeerChange(userId, networkId, fp, senderHandle);
     // A REKEY from a peer we've never handshaked with is illegitimate.
     if (change === 'new') return { replies: [] };
-    if (isTofuBlock(change))
+    if (isTofuBlock(change)) {
+      // Remember the change (as the KEYREQ/KEYRSP handlers do) so a later
+      // `/e2e reverify` can re-pin in place instead of falling back to a forget.
+      this.stashKeyChange(userId, networkId, senderHandle, change, rekey.pubkey, rekey.channel);
       return {
         replies: [],
         notice: this.tofuWarning(senderHandle, change, fp),
         channel: rekey.channel,
       };
+    }
 
     // ECDH from OUR Ed25519 identity (converted to X25519) with their fresh
     // ephemeral, HKDF under the REKEY domain separator.
@@ -633,6 +648,16 @@ export class E2eManager {
     if (
       !this.installIncoming(userId, networkId, senderHandle, rekey.channel, fp, sk, this.nowUnix())
     ) {
+      // Install-time second line of defense (see handleKeyRsp): stash the new
+      // pubkey so `/e2e reverify` can re-pin it in place.
+      this.stashKeyChange(
+        userId,
+        networkId,
+        senderHandle,
+        'fingerprint-changed',
+        rekey.pubkey,
+        rekey.channel,
+      );
       return {
         replies: [],
         notice: this.tofuWarning(senderHandle, 'fingerprint-changed', fp),
@@ -916,7 +941,17 @@ export class E2eManager {
     try {
       const peer = keyring.getPeerByHandle(userId, networkId, handle);
       if (peer) keyring.setPeerStatus(userId, networkId, peer.fingerprint, 'revoked');
-      const channels = keyring.listIncomingChannelsForHandle(userId, networkId, handle);
+      // Rotate every channel where the peer can read us. That's the UNION of the
+      // channels we hold an incoming session on AND the channels they're an
+      // outgoing recipient of — the latter is recorded at KEYRSP-build, before any
+      // reciprocal incoming session exists, so a peer who never completed the
+      // reciprocal handshake is an outgoing recipient with NO incoming session.
+      // Enumerating from incoming sessions alone left such a peer able to decrypt
+      // our future messages (and still queued for the next REKEY) after a revoke.
+      const channels = new Set([
+        ...keyring.listIncomingChannelsForHandle(userId, networkId, handle),
+        ...keyring.listOutgoingChannelsForHandle(userId, networkId, handle),
+      ]);
       const revoked = keyring.revokeIncomingSessionsForHandle(userId, networkId, handle);
       for (const channel of channels) {
         keyring.markOutgoingPendingRotation(userId, networkId, channel);
@@ -996,8 +1031,13 @@ export class E2eManager {
   /** Accept a TOFU-blocked key/handle change for `handle` after the user verified
    *  it out-of-band. If we remembered the change (it appeared since the last
    *  handshake), re-pin the new key/handle as trusted IN PLACE — no re-handshake,
-   *  no re-prompt — matching repartee. If there's nothing remembered, fall back to
-   *  a clean forget so the next handshake re-pins from scratch. Never throws. */
+   *  no re-prompt. If there's nothing remembered, fall back to a clean forget so
+   *  the next handshake re-pins from scratch. Never throws.
+   *
+   *  Parity note: repartee applies in place for a fingerprint change but forgets
+   *  for a handle change; Lurker deliberately re-pins in place for BOTH (a
+   *  handle change is the same already-trusted key under a new ident@host, so an
+   *  in-place re-pin is safe and avoids a needless re-handshake). */
   reverifyPeer(userId: number, networkId: number, handle: string): ReverifyOutcome {
     try {
       const stashKey = this.keyChangeKey(userId, networkId, handle);
@@ -1488,7 +1528,10 @@ export class E2eManager {
     const byFp = keyring.getPeerByFingerprint(userId, networkId, fp);
     if (byFp) {
       if (byFp.globalStatus === 'revoked') return 'revoked';
-      if (byFp.lastHandle && !eqLower(byFp.lastHandle, handle)) return 'handle-changed';
+      // A missing/empty stored handle counts as a change (matching repartee's
+      // `last_handle != Some(new)`, where None != Some(h) is true) — otherwise an
+      // imported peer with a null handle would suppress the handle-changed warning.
+      if (!byFp.lastHandle || !eqLower(byFp.lastHandle, handle)) return 'handle-changed';
       return 'known';
     }
     const byHandle = keyring.getPeerByHandle(userId, networkId, handle);

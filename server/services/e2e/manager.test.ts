@@ -210,6 +210,44 @@ describe('E2eManager TOFU + replay + window', () => {
     mgr.forgetPeer(alice, aliceNet, BOB_H); // restore the shared keyring for later tests
   });
 
+  it('treats a pinned peer with a null stored handle as handle-changed (matches repartee)', async () => {
+    // The null-last_handle state is reachable via an imported repartee keyring.
+    // repartee's `last_handle != Some(new)` flags this as a change; Lurker must
+    // not silently swallow it as 'known'.
+    const keyring = await import('../../db/e2e.js');
+    fullHandshake('#nullh'); // pin Bob's fp under BOB_H, trusted
+    const peer = keyring.getPeerByHandle(alice, aliceNet, BOB_H)!;
+    keyring.upsertPeer(alice, aliceNet, {
+      fingerprint: peer.fingerprint,
+      pubkey: peer.pubkey,
+      lastHandle: null, // simulate an imported peer carrying no handle
+      lastNick: null,
+      firstSeen: peer.firstSeen,
+      lastSeen: peer.lastSeen,
+      globalStatus: 'trusted', // ignored on conflict; the row stays trusted
+    });
+
+    // Bob re-handshakes under BOB_H. A null stored handle must surface a
+    // handle-changed warning (refused), not a silent re-handshake.
+    mgr.setChannelConfig(bob, bobNet, '#nullh', true, 'auto-accept');
+    const out = mgr.handleHandshakeBody(
+      alice,
+      aliceNet,
+      BOB_H,
+      'bob',
+      mgr.buildKeyReq(bob, bobNet, '#nullh')!,
+    )!;
+    expect(out.replies).toHaveLength(0);
+    expect(out.notice?.level).toBe('warn');
+    expect(out.notice?.text).toMatch(/new handle/);
+
+    // Restore the shared keyring: the row now has a NULL handle, so the
+    // handle-keyed forgetPeer can't reach it — delete by fingerprint.
+    keyring.deletePeerByFingerprint(alice, aliceNet, peer.fingerprint);
+    mgr.forgetPeer(alice, aliceNet, BOB_H); // sessions/recipients/pending
+    mgr.forgetPeer(bob, bobNet, ALICE_H);
+  });
+
   it('flags a replayed chunk', () => {
     fullHandshake('#rp');
     const line = encLines(alice, aliceNet, '#rp', 'once')[0];
@@ -460,6 +498,52 @@ describe('E2eManager key rotation (Phase 2)', () => {
   it('rotateChannel is a no-op (false) when there is no outgoing session yet', () => {
     expect(mgr.rotateChannel(alice, aliceNet, '#rot-never')).toBe(false);
     expect(mgr.takePendingRekeySends(alice, aliceNet)).toEqual([]);
+  });
+
+  it('revoke cuts off an outgoing-only recipient (incomplete reciprocal handshake)', () => {
+    // Regression: a peer who completed only HALF the handshake — they got our
+    // channel key (so they can read us) but never answered our reciprocal KEYREQ,
+    // so we hold NO incoming session for them. Revoke once enumerated rotation
+    // channels from incoming sessions alone and silently missed this peer.
+    const ch = '#rv-outgoing-only';
+    mgr.forgetPeer(alice, aliceNet, BOB_H);
+    mgr.forgetPeer(bob, bobNet, ALICE_H);
+    mgr.setChannelConfig(alice, aliceNet, ch, true, 'auto-accept');
+    mgr.setChannelConfig(bob, bobNet, ch, true, 'auto-accept');
+
+    // Bob → KEYREQ; Alice auto-accepts → KEYRSP (records Bob as an outgoing
+    // recipient) + a reciprocal KEYREQ. Bob applies the KEYRSP but never answers
+    // the reciprocal, so Alice has the recipient row but no incoming session.
+    const aOut = mgr.handleHandshakeBody(
+      alice,
+      aliceNet,
+      BOB_H,
+      'bob',
+      mgr.buildKeyReq(bob, bobNet, ch)!,
+    )!;
+    expect(aOut.replies).toHaveLength(2); // KEYRSP + reciprocal KEYREQ
+    mgr.handleHandshakeBody(bob, bobNet, ALICE_H, 'alice', aOut.replies[0]); // Bob installs Alice's key
+    // aOut.replies[1] (Alice's reciprocal KEYREQ) is intentionally dropped.
+
+    // Precondition: Bob can read Alice (he has her current channel key).
+    const pre = encLines(alice, aliceNet, ch, 'pre-revoke');
+    expect(mgr.decryptIncoming(bob, bobNet, ALICE_H, ch, pre[0])).toMatchObject({
+      kind: 'plaintext',
+    });
+
+    // Revoke Bob → the next send must rotate the key away from him even though
+    // there was never an incoming session on this channel.
+    expect(mgr.revokePeer(alice, aliceNet, BOB_H)).toBe(true);
+    const post = encLines(alice, aliceNet, ch, 'post-revoke');
+    // Bob was the only recipient and was dropped, so nothing is re-keyed to him.
+    expect(mgr.takePendingRekeySends(alice, aliceNet)).toEqual([]);
+    // And he can no longer decrypt Alice's post-revoke traffic.
+    expect(mgr.decryptIncoming(bob, bobNet, ALICE_H, ch, post[0]).kind).not.toBe('plaintext');
+
+    // Clean up the shared DB: leaving Bob revoked would block a later
+    // re-handshake in another test (the keyring is shared across this file).
+    mgr.forgetPeer(alice, aliceNet, BOB_H);
+    mgr.forgetPeer(bob, bobNet, ALICE_H);
   });
 
   it('rejects a replayed REKEY (nonce-LRU) so a superseded key cannot be reinstalled', () => {

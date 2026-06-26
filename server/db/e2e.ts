@@ -334,6 +334,10 @@ const incomingChannelsForHandleStmt = db.prepare(
   `SELECT DISTINCT channel FROM e2e_incoming_sessions
    WHERE user_id = ? AND network_id = ? AND handle = ?`,
 );
+const outgoingChannelsForHandleStmt = db.prepare(
+  `SELECT DISTINCT channel FROM e2e_outgoing_recipients
+   WHERE user_id = ? AND network_id = ? AND handle = ?`,
+);
 const listTrustedForChannelStmt = db.prepare(
   `SELECT * FROM e2e_incoming_sessions
    WHERE user_id = ? AND network_id = ? AND channel = ? AND status = 'trusted'`,
@@ -476,6 +480,20 @@ export function listIncomingChannelsForHandle(
 ): string[] {
   return (
     incomingChannelsForHandleStmt.all(userId, networkId, handle) as Array<{ channel: string }>
+  ).map((r) => r.channel);
+}
+
+/** Channels where `handle` is one of OUR outgoing-key recipients (i.e. they can
+ *  decrypt our messages there). This is the authoritative "who can read us" set
+ *  and is recorded at KEYRSP-build time, before/independent of any reciprocal
+ *  incoming session — so revoke must consult it, not just incoming sessions. */
+export function listOutgoingChannelsForHandle(
+  userId: number,
+  networkId: number,
+  handle: string,
+): string[] {
+  return (
+    outgoingChannelsForHandleStmt.all(userId, networkId, handle) as Array<{ channel: string }>
   ).map((r) => r.channel);
 }
 
