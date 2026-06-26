@@ -106,6 +106,7 @@
             /></span>
           </div>
           <span class="body" :class="bodyClass(row.m)">
+            <i v-if="isE2e(row.m)" class="fa-solid fa-lock e2e-lock" title="End-to-end encrypted" />
             <RenderSegments
               :segments="textSegments(row.m)"
               :self-color="selfColor"
@@ -133,6 +134,7 @@
             ><template v-else>{{ row.continuationAuthor ? '' : prefixText(row.m) }}</template></span
           >
           <span class="body" :class="bodyClass(row.m)">
+            <i v-if="isE2e(row.m)" class="fa-solid fa-lock e2e-lock" title="End-to-end encrypted" />
             <RenderSegments
               v-if="hasInlineText(row.m)"
               :segments="textSegments(row.m)"
@@ -325,6 +327,8 @@ interface ChatMessage {
   // System-buffer lines (#355): the network this line is about, when any. The
   // prefix column resolves the network's current name from it.
   originNetworkId?: number | null;
+  // RPE2E (#382): this line was end-to-end encrypted on the wire — render a 🔒.
+  e2e?: boolean;
   [key: string]: unknown;
 }
 
@@ -1103,6 +1107,11 @@ function hasInlineText(m: ChatMessage | undefined): boolean {
   return m?.type === 'message' || m?.type === 'notice' || m?.type === 'action';
 }
 
+// RPE2E (#382): show the 🔒 lock on a line that rode the wire encrypted.
+function isE2e(m: ChatMessage | undefined): boolean {
+  return !!m?.e2e;
+}
+
 function textSegments(m: ChatMessage | undefined): RenderSegment[] {
   if (!m) return [];
   if (m.type === 'action') {
@@ -1810,6 +1819,13 @@ watch(
 }
 .body.italic {
   font-style: italic;
+}
+/* RPE2E lock (#382): a muted inline marker that a line rode the wire encrypted.
+   Hierarchy via color/opacity, not font-size (house rule). */
+.e2e-lock {
+  margin-right: 0.5ch;
+  color: var(--good);
+  opacity: 0.75;
 }
 /* .msg-link styling lives in src/assets/main.css (shared with the topic bar). */
 

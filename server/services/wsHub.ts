@@ -1466,6 +1466,28 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         }
         break;
       }
+      case 'e2e': {
+        // RPE2E `/e2e …` command (#382). The connection runs the subcommand and
+        // publishes its own ephemeral status to the issuing buffer; we only need
+        // to tell the user when the network isn't connected (no connection = no
+        // place for that status to come from).
+        const networkId = Number(msg.networkId);
+        const target = typeof msg.target === 'string' ? msg.target : '';
+        const args = typeof msg.args === 'string' ? msg.args : '';
+        const ok = ircManager.e2eCommand(userId, networkId, target, args);
+        if (!ok) {
+          const evt = {
+            type: 'error',
+            networkId,
+            target,
+            text: '🔒 /e2e: this network isn’t connected',
+            time: new Date().toISOString(),
+            self: false,
+          } as unknown as MessageEvent;
+          fanOut(userId, { ...decorateMessage(userId, evt), kind: 'irc' });
+        }
+        break;
+      }
       case 'join':
         ircManager.joinChannel(userId, msg.networkId as number, msg.channel as string);
         break;

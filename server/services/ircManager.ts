@@ -38,7 +38,17 @@ import {
 } from '../db/contacts.js';
 import type { ContactRecord } from '../db/contacts.js';
 import { splitSay, splitAction, hasInteriorNewline } from './messageSplit.js';
+import { e2eManager } from './e2e/manager.js';
+import { contextKey } from './e2e/context.js';
 import db from '../db/index.js';
+
+// RPE2E is wired for real IRC channels only in this phase (#382). DM
+// pseudochannels (`@ident@host`) need the peer's server-stamped handle resolved
+// at send time, which the outbound path doesn't have yet — they're a fast-follow.
+const E2E_CHANNEL_PREFIXES = ['#', '&', '!', '+'];
+function isE2eChannel(target: string): boolean {
+  return E2E_CHANNEL_PREFIXES.some((p) => target.startsWith(p));
+}
 
 // User away state row shape from userAwayState.ts (that file isn't typed yet).
 interface AwayStateRow {
@@ -273,6 +283,43 @@ class IrcManager extends EventEmitter {
   send(userId: number, networkId: number, target: string, text: string): boolean {
     const conn = this.getConnection(userId, networkId);
     if (!conn) return false;
+
+    // RPE2E: on an encryption-enabled channel, transmit ciphertext chunks on the
+    // wire but show the SENDER the readable plaintext locally (one bubble, lock
+    // flag). encryptOutgoing handles its own chunking, so this path bypasses the
+    // multiline/splitSay plumbing entirely. 'disabled' falls through to plaintext;
+    // 'error' must NOT fall through (that would leak cleartext on an E2E channel).
+    if (isE2eChannel(target)) {
+      const outcome = e2eManager.encryptOutgoing(userId, networkId, contextKey(target, ''), text);
+      if (process.env.LURKER_E2E_DEBUG === '1') {
+        console.log(
+          `[e2e] outbound ${target}: ${outcome.kind}` +
+            (outcome.kind === 'encrypted' ? ` (${outcome.lines.length} line(s))` : ''),
+        );
+      }
+      if (outcome.kind === 'error') {
+        conn.publishEphemeral({
+          type: 'error',
+          target,
+          text: `🔒 not sent — encryption failed: ${outcome.reason}`,
+        });
+        return true; // surfaced inline; don't fall through to a cleartext send
+      }
+      if (outcome.kind === 'encrypted') {
+        for (const line of outcome.lines) conn.say(target, line);
+        conn.publish({
+          type: 'message',
+          target,
+          nick: conn.client.user?.nick,
+          text,
+          kind: 'privmsg',
+          self: true,
+          e2e: true,
+        });
+        return true;
+      }
+      // kind === 'disabled' → fall through to the normal plaintext send below.
+    }
     // A multi-line compose rides draft/multiline batches where the server
     // supports the cap: it lands as one logical message per batch (the body is
     // partitioned to the server's limits, so a big paste is N messages, not N
@@ -349,6 +396,17 @@ class IrcManager extends EventEmitter {
     if (!target || target.startsWith(':server:')) return false;
     if (!['active', 'paused', 'done'].includes(state)) return false;
     conn.sendTyping(target, state);
+    return true;
+  }
+
+  // RPE2E command surface (#382). Dispatches a `/e2e …` subcommand on a live
+  // connection (handshakes/config/trust); the connection publishes its own
+  // ephemeral status output to the issuing buffer. Returns false only when the
+  // network isn't connected, so the WS layer can tell the user.
+  e2eCommand(userId: number, networkId: number, target: string, argLine: string): boolean {
+    const conn = this.getConnection(userId, networkId);
+    if (!conn) return false;
+    conn.runE2eCommand(target, argLine);
     return true;
   }
 

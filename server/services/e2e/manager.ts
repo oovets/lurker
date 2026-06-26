@@ -76,6 +76,10 @@ export interface UserNotice {
 export interface HandshakeOutcome {
   replies: string[];
   notice?: UserNotice;
+  /** The channel/context this handshake is about, so the IRC layer can route
+   *  `notice` to that buffer instead of the server buffer. Only set on
+   *  notice-bearing outcomes (silent drops stay `{ replies: [] }`). */
+  channel?: string;
 }
 
 export type EncryptOutcome =
@@ -325,11 +329,27 @@ export class E2eManager {
     if (!verify(req.pubkey, payload, req.sig)) return { replies: [] };
 
     const mode = this.effectiveMode(userId, networkId, senderHandle, req.channel);
-    if (mode === null) return { replies: [] }; // channel not enabled
+    if (mode === null) {
+      // Channel not enabled. Don't silently drop — the peer would sit "awaiting a
+      // session" forever with nothing on our screen to explain it (the bug that
+      // motivated this). The KEYREQ already cleared verify + rate-limit, so
+      // surface a one-line hint and let the user opt in. No state is recorded for
+      // a channel we never enabled; enabling + initiating is the opt-in.
+      const who = senderNick ?? senderHandle;
+      return {
+        replies: [],
+        notice: {
+          level: 'info',
+          text: `${who} wants an encrypted session on ${req.channel} — enable it with /e2e on ${req.channel}, then /e2e handshake ${who}`,
+        },
+        channel: req.channel,
+      };
+    }
 
     const fp = fingerprint(req.pubkey);
     const change = this.classifyPeerChange(userId, networkId, fp, senderHandle);
-    if (isTofuBlock(change)) return { replies: [], notice: this.tofuWarning(senderHandle, change) };
+    if (isTofuBlock(change))
+      return { replies: [], notice: this.tofuWarning(senderHandle, change), channel: req.channel };
     this.upsertSeenPeer(userId, networkId, fp, req.pubkey, senderHandle, senderNick);
 
     const alreadyTrusted = this.hasTrustedIncoming(userId, networkId, senderHandle, req.channel);
@@ -342,6 +362,7 @@ export class E2eManager {
           level: 'info',
           text: `${who} wants to start an encrypted session on ${req.channel} — /e2e accept ${who}`,
         },
+        channel: req.channel,
       };
     }
     if (mode === 'quiet' && !alreadyTrusted) return { replies: [] };
@@ -376,7 +397,8 @@ export class E2eManager {
 
     const fp = fingerprint(rsp.pubkey);
     const change = this.classifyPeerChange(userId, networkId, fp, senderHandle);
-    if (isTofuBlock(change)) return { replies: [], notice: this.tofuWarning(senderHandle, change) };
+    if (isTofuBlock(change))
+      return { replies: [], notice: this.tofuWarning(senderHandle, change), channel: rsp.channel };
 
     // We initiated, so receiving the response is our consent → trust the peer.
     const now = this.nowUnix();
@@ -392,11 +414,19 @@ export class E2eManager {
     keyring.setPeerStatus(userId, networkId, fp, 'trusted');
 
     if (!this.installIncoming(userId, networkId, senderHandle, rsp.channel, fp, sk, now)) {
-      return { replies: [], notice: this.tofuWarning(senderHandle, 'fingerprint-changed') };
+      return {
+        replies: [],
+        notice: this.tofuWarning(senderHandle, 'fingerprint-changed'),
+        channel: rsp.channel,
+      };
     }
     return {
       replies: [],
-      notice: { level: 'info', text: `Encrypted session established with ${senderHandle}` },
+      notice: {
+        level: 'info',
+        text: `🔒 encrypted session established with ${senderHandle} on ${rsp.channel}`,
+      },
+      channel: rsp.channel,
     };
   }
 
@@ -429,7 +459,12 @@ export class E2eManager {
     const change = this.classifyPeerChange(userId, networkId, fp, senderHandle);
     // A REKEY from a peer we've never handshaked with is illegitimate.
     if (change === 'new') return { replies: [] };
-    if (isTofuBlock(change)) return { replies: [], notice: this.tofuWarning(senderHandle, change) };
+    if (isTofuBlock(change))
+      return {
+        replies: [],
+        notice: this.tofuWarning(senderHandle, change),
+        channel: rekey.channel,
+      };
 
     // ECDH from OUR Ed25519 identity (converted to X25519) with their fresh
     // ephemeral, HKDF under the REKEY domain separator.
@@ -447,7 +482,11 @@ export class E2eManager {
     if (
       !this.installIncoming(userId, networkId, senderHandle, rekey.channel, fp, sk, this.nowUnix())
     ) {
-      return { replies: [], notice: this.tofuWarning(senderHandle, 'fingerprint-changed') };
+      return {
+        replies: [],
+        notice: this.tofuWarning(senderHandle, 'fingerprint-changed'),
+        channel: rekey.channel,
+      };
     }
     return { replies: [] };
   }
@@ -463,7 +502,11 @@ export class E2eManager {
       const key = this.inboundKey(userId, networkId, senderHandle, channel);
       const entry = this.pendingInbound.get(key);
       if (!entry) {
-        return { replies: [], notice: { level: 'warn', text: 'no pending handshake to accept' } };
+        return {
+          replies: [],
+          notice: { level: 'warn', text: `no pending handshake from ${senderHandle} to accept` },
+          channel,
+        };
       }
       this.pendingInbound.delete(key);
       const alreadyTrusted = this.hasTrustedIncoming(userId, networkId, senderHandle, channel);

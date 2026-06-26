@@ -87,6 +87,16 @@ describe('E2eManager handshake + exchange', () => {
     });
   });
 
+  it('hints (with the channel) instead of silently dropping a KEYREQ for a not-enabled channel (#382)', () => {
+    // #later is never configured for Alice — a disabled channel. A peer's KEYREQ
+    // must surface a routable hint, not vanish (the "awaiting a session" bug).
+    const req = mgr.buildKeyReq(bob, bobNet, '#later')!;
+    const out = mgr.handleHandshakeBody(alice, aliceNet, BOB_H, 'bob', req)!;
+    expect(out.replies).toHaveLength(0); // never auto-responds on a disabled channel
+    expect(out.channel).toBe('#later'); // routable to the channel buffer
+    expect(out.notice?.text).toMatch(/\/e2e on #later/);
+  });
+
   it('chunks a long message and decrypts every chunk', () => {
     fullHandshake('#big');
     const long = 'x'.repeat(500);

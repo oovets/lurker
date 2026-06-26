@@ -1996,6 +1996,10 @@ const COMMANDS_LINES = [
   '  /set <key> <value…>    — change a setting; /set (or /set ?) lists all keys',
   '  /get <key>             — read a setting back (output in the system buffer)',
   '  /raw <line>            — send a raw IRC line (alias: /quote)',
+  '  /e2e <sub>             — end-to-end encryption for a channel (experimental)',
+  '      on [#chan] [auto|normal|quiet]   ·   off [#chan]   ·   handshake <nick>',
+  '      accept <nick>   ·   verify <nick>   ·   revoke <nick>   ·   reverify <nick>',
+  '      fingerprint   ·   status',
   '  /commands              — this list',
   '  //text                 — send literal "/text" as a message (escape)',
 ];
@@ -2481,6 +2485,11 @@ function handleCommand(line: string, networkId: number | null, target: string): 
   }
 
   switch (verb) {
+    case 'e2e':
+      // RPE2E (#382). Thin pass-through: the server parses the subcommand and
+      // publishes its status/results back into this buffer. We forward the raw
+      // arg line plus the issuing buffer so the server can default the channel.
+      return sendOrToast({ type: 'e2e', networkId, target, args: argLine }, line);
     case 'me':
       return ackedSend({ type: 'action', networkId, target, text: argLine }, argLine);
     case 'msg':
