@@ -775,6 +775,18 @@ function parseSinceParam(rawUrl: string): number {
   }
 }
 
+// Reset the channel-list cache the moment we send `/LIST`, rather than waiting
+// for the server's RPL_LISTSTART (321). Many ircds omit 321 entirely, and
+// irc-framework only emits 'channel list start' (the sole other caller of
+// clearChannels) when it arrives. Without an unconditional reset here, a refresh
+// upserts the fresh rows on top of the stale cache and never drops channels that
+// have since disappeared — they reappear forever (issue #396). Mirrors The
+// Lounge's inputs/list.ts, which empties chanCache when the user sends /list.
+export function startChanlistRefresh(networkId: number): void {
+  chanlistDb.clearChannels(networkId);
+  chanlistDb.setMeta(networkId, { inProgress: true, totalCount: 0, fetchedAt: null });
+}
+
 export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
   const wss = new WebSocketServer({ noServer: true });
   // Per-user pending auto-away timers. Set when a user goes from 1→0 sockets;
@@ -1643,6 +1655,7 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         }
         chanlistInFlight.add(networkId);
         try {
+          startChanlistRefresh(networkId);
           conn.raw('LIST');
         } catch (_) {
           chanlistInFlight.delete(networkId);
