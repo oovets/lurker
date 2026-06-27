@@ -556,6 +556,22 @@ export const REGISTRY: readonly SettingOption[] = Object.freeze([
 
   // ─── Misc look ────────────────────────────────────────────────────────
   {
+    key: 'look.modal.overlay',
+    label: 'Modal backdrop (desktop)',
+    category: 'appearance',
+    group: 'misc',
+    type: 'enum',
+    choices: ['wordmark', 'dimmed', 'clear'],
+    default: 'wordmark',
+    description:
+      'Backdrop shown behind centered modals on desktop. "wordmark" (default) ' +
+      'is the opaque tiled-word wallpaper. "dimmed" replaces it with a ' +
+      'translucent scrim so the chat stays visible (just darkened) behind the ' +
+      'modal. "clear" shows the app behind with no tint at all — the card ' +
+      'floats on its border and shadow. Has no effect on mobile, where every ' +
+      'modal is a full-frame opaque sheet regardless of this setting.',
+  },
+  {
     key: 'look.action.italic',
     label: 'Italicize /me actions',
     category: 'appearance',
