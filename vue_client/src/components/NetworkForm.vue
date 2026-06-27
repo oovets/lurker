@@ -65,6 +65,7 @@
                 v-if="isEdit && props.network?.has_sasl_password"
                 type="button"
                 class="clear-link"
+                :aria-label="saslPasswordClearLabel"
                 @click="toggleClearSasl"
               >
                 {{ clearSaslPassword ? 'keep' : 'clear' }}
@@ -90,6 +91,7 @@
                 v-if="isEdit && props.network?.has_password"
                 type="button"
                 class="clear-link"
+                :aria-label="serverPasswordClearLabel"
                 @click="toggleClearServer"
               >
                 {{ clearServerPassword ? 'keep' : 'clear' }}
@@ -295,6 +297,19 @@ const saslPasswordPlaceholder = computed(() =>
     : isEdit.value && props.network?.has_sasl_password
       ? '(saved — type to replace)'
       : '',
+);
+
+// The visible toggle text is just "clear"/"keep" — fine sighted (it sits beside
+// the field it acts on) but ambiguous to a screen reader, where two such buttons
+// read identically (#420 review). A descriptive accessible name names the field;
+// keeping the leading verb in sync with the visible label satisfies WCAG 2.5.3
+// (Label in Name) and conveys the toggle's state without an aria-pressed that
+// would fight the changing label.
+const serverPasswordClearLabel = computed(() =>
+  clearServerPassword.value ? 'keep saved server password' : 'clear saved server password',
+);
+const saslPasswordClearLabel = computed(() =>
+  clearSaslPassword.value ? 'keep saved SASL password' : 'clear saved SASL password',
 );
 
 const loading = ref(false);
