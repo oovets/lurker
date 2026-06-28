@@ -54,6 +54,12 @@ interface SlackMessageShape {
   reactions?: Array<{ name?: string; count?: number }>;
 }
 
+// One emoji reaction on a message — rendered as a chip by the client.
+interface ReactionChip {
+  name: string;
+  count: number;
+}
+
 // Run an async fn over items with bounded concurrency — cuts cold-start time
 // (members + per-conversation history) from sum-of-calls to roughly
 // slowest-call × ceil(n/limit), while staying gentle on Slack's rate limits.
@@ -91,6 +97,10 @@ export class SlackConnection implements Connection {
   // De-dup key `${channelId}:${ts}` so a message present in both the history
   // backfill and the live socket stream is only persisted once.
   protected seenTs = new Set<string>();
+  // Per-message reaction counts (`${channelId}:${ts}` → name → count), seeded
+  // from history and updated by live reaction_added/removed so we can push the
+  // full set to the client on each change.
+  protected reactionTallies = new Map<string, Map<string, number>>();
 
   protected web: WebClient | null = null;
   protected socket: SocketModeClient | null = null;
@@ -171,6 +181,24 @@ export class SlackConnection implements Connection {
         this.onTyping(args.event);
       },
     );
+    const onReaction =
+      (delta: number) =>
+      async (args: {
+        event?: { reaction?: string; item?: { channel?: string; ts?: string } };
+        ack?: () => Promise<void>;
+      }) => {
+        try {
+          await args.ack?.();
+        } catch {
+          /* ack best-effort */
+        }
+        const e = args.event;
+        if (e?.reaction && e.item?.channel && e.item.ts) {
+          this.applyReactionDelta(e.item.channel, e.item.ts, e.reaction, delta);
+        }
+      };
+    this.socket.on('reaction_added', onReaction(+1));
+    this.socket.on('reaction_removed', onReaction(-1));
     await this.socket.start();
   }
 
@@ -220,28 +248,86 @@ export class SlackConnection implements Connection {
 
     const now = Date.now();
     // Raw Slack-style markup in a couple of lines so the GUI visibly shows the
-    // mention/channel/link resolution (run through the same formatText path).
-    const history: Array<[string, string, string, number]> = [
-      ['#general', 'Alice', 'welcome to the demo workspace 👋', now - 60_000],
-      ['#general', 'Bob', "this is Lurker's GUI rendering Slack-shaped data", now - 50_000],
-      ['#general', 'Bob', 'ping <@U_ME> — see <https://lurker.chat|the Lurker site>', now - 45_000],
-      ['#general', 'me', 'nice — and split panes work on these buffers too', now - 40_000],
-      ['#general', 'Alice', 'shipping Slack support 🚀  ·  :tada: 3  :rocket: 2', now - 35_000],
-      ['#general', 'Bob', '↳ huge — thread replies show inline like this', now - 33_000],
-      ['#random', 'Alice', 'random thoughts land in <#C_RND|random>', now - 30_000],
-      ['Alice', 'Alice', 'hey, this is a direct message', now - 20_000],
+    // mention/channel/link resolution; one line carries reactions (chips) and
+    // a stable slackTs so the drip below can bump a reaction live.
+    const RX_TS = 'demo-rx';
+    const history: Array<{
+      target: string;
+      nick: string;
+      text: string;
+      ms: number;
+      reactions?: ReactionChip[];
+      slackTs?: string;
+    }> = [
+      {
+        target: '#general',
+        nick: 'Alice',
+        text: 'welcome to the demo workspace 👋',
+        ms: now - 60_000,
+      },
+      {
+        target: '#general',
+        nick: 'Bob',
+        text: "this is Lurker's GUI rendering Slack-shaped data",
+        ms: now - 50_000,
+      },
+      {
+        target: '#general',
+        nick: 'Bob',
+        text: 'ping <@U_ME> — see <https://lurker.chat|the Lurker site>',
+        ms: now - 45_000,
+      },
+      {
+        target: '#general',
+        nick: 'me',
+        text: 'nice — and split panes work on these buffers too',
+        ms: now - 40_000,
+      },
+      {
+        target: '#general',
+        nick: 'Alice',
+        text: 'shipping Slack support 🚀',
+        ms: now - 35_000,
+        reactions: [
+          { name: 'tada', count: 3 },
+          { name: 'rocket', count: 2 },
+        ],
+        slackTs: RX_TS,
+      },
+      {
+        target: '#general',
+        nick: 'Bob',
+        text: '↳ huge — thread replies show inline like this',
+        ms: now - 33_000,
+      },
+      {
+        target: '#random',
+        nick: 'Alice',
+        text: 'random thoughts land in <#C_RND|random>',
+        ms: now - 30_000,
+      },
+      { target: 'Alice', nick: 'Alice', text: 'hey, this is a direct message', ms: now - 20_000 },
     ];
-    for (const [target, nick, text, ms] of history) {
+    for (const h of history) {
+      if (h.reactions && h.slackTs) {
+        const tally = new Map<string, number>();
+        for (const r of h.reactions) tally.set(r.name, r.count);
+        this.reactionTallies.set(`C_GEN:${h.slackTs}`, tally);
+      }
       insertMessage({
         networkId: this.network.id,
-        target,
-        time: new Date(ms).toISOString(),
+        target: h.target,
+        time: new Date(h.ms).toISOString(),
         type: 'message',
-        nick,
-        text: this.formatText(text),
+        nick: h.nick,
+        text: this.formatText(h.text),
         kind: 'privmsg',
-        self: nick === 'me',
-        extra: { demo: true },
+        self: h.nick === 'me',
+        extra: {
+          demo: true,
+          ...(h.slackTs ? { slackTs: h.slackTs } : {}),
+          ...(h.reactions ? { reactions: h.reactions } : {}),
+        },
         matchedRuleId: null,
         userhost: null,
         fromIgnored: false,
@@ -258,7 +344,14 @@ export class SlackConnection implements Connection {
     let i = 0;
     this.demoTimer = setInterval(() => {
       if (this.disposed) return;
-      const [nick, text] = drip[i % drip.length];
+      // Every other tick, bump a live reaction on the shipping message so the
+      // chips visibly update; otherwise drip a new message.
+      if (i % 2 === 1) {
+        this.applyReactionDelta('C_GEN', RX_TS, 'thumbsup', +1);
+        i += 1;
+        return;
+      }
+      const [nick, text] = drip[(i >> 1) % drip.length];
       i += 1;
       this.publish({
         type: 'message',
@@ -476,7 +569,9 @@ export class SlackConnection implements Connection {
       text: built.text,
       kind: 'privmsg',
       self: built.self,
-      extra: { slackTs: msg.ts },
+      // slackTs lets a live reaction update find this row client-side; reactions
+      // persist so chips survive a reload (both spread to top-level by rowToEvent).
+      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
       matchedRuleId: null,
       userhost: null,
       fromIgnored: false,
@@ -499,8 +594,37 @@ export class SlackConnection implements Connection {
       kind: 'privmsg',
       self: built.self,
       time: built.time,
-      extra: { slackTs: msg.ts },
+      // Top-level for the live client; mirrored into extra so a reload keeps them.
+      slackTs: msg.ts,
+      reactions: built.reactions,
+      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
     });
+  }
+
+  // ── Live reactions ────────────────────────────────────────────────────────
+
+  protected applyReactionDelta(channelId: string, ts: string, name: string, delta: number): void {
+    const key = `${channelId}:${ts}`;
+    let tally = this.reactionTallies.get(key);
+    if (!tally) {
+      tally = new Map<string, number>();
+      this.reactionTallies.set(key, tally);
+    }
+    tally.set(name, Math.max(0, (tally.get(name) || 0) + delta));
+    if ((tally.get(name) || 0) === 0) tally.delete(name);
+    this.emitReactionUpdate(channelId, ts);
+  }
+
+  // Push the full current reaction set for a message; the client finds the row
+  // by slackTs and replaces its chips (no new message row).
+  protected emitReactionUpdate(channelId: string, ts: string): void {
+    const target = this.idToTarget.get(channelId);
+    if (!target) return;
+    const tally = this.reactionTallies.get(`${channelId}:${ts}`) || new Map<string, number>();
+    const reactions: ReactionChip[] = Array.from(tally.entries())
+      .filter(([, count]) => count > 0)
+      .map(([name, count]) => ({ name, count }));
+    this.publishEphemeral({ type: 'reaction', target, slackTs: ts, reactions });
   }
 
   // Shared message mapping + de-dup. Returns null for messages we skip (edits,
@@ -509,7 +633,13 @@ export class SlackConnection implements Connection {
     channelId: string,
     _target: string,
     msg: SlackMessageShape,
-  ): Promise<{ nick: string; text: string; self: boolean; time: string } | null> {
+  ): Promise<{
+    nick: string;
+    text: string;
+    self: boolean;
+    time: string;
+    reactions: ReactionChip[];
+  } | null> {
     if (!msg.ts) return null;
     // MVP scope: plain messages + bot messages only; skip edits/deletes/joins.
     if (msg.subtype && msg.subtype !== 'bot_message' && msg.subtype !== 'me_message') return null;
@@ -524,19 +654,23 @@ export class SlackConnection implements Connection {
     // in the channel with a marker, so a flat IRC-style buffer still reads as a
     // conversation. A dedicated thread pane is a later iteration.
     if (msg.thread_ts && msg.thread_ts !== msg.ts) text = `↳ ${text}`;
-    // Reactions render as trailing emoji shortcodes (Lurker draws the glyphs).
-    // History carries the current tallies; live add/remove updates are a later
-    // iteration (they'd need an editable-message surface in the client).
-    const reactions = (msg.reactions || [])
-      .filter((r) => r.name)
-      .map((r) => `:${r.name}: ${r.count ?? 1}`);
-    if (reactions.length)
-      text = text ? `${text}  ·  ${reactions.join('  ')}` : reactions.join('  ');
+    // Reactions ride as structured data on the event (rendered as chips by the
+    // client). Seed the per-message tally so live reaction_added/removed deltas
+    // can recompute and push an updated set.
+    const reactions: ReactionChip[] = (msg.reactions || [])
+      .filter((r): r is { name: string; count?: number } => !!r.name)
+      .map((r) => ({ name: r.name, count: r.count ?? 1 }));
+    if (reactions.length) {
+      const tally = new Map<string, number>();
+      for (const r of reactions) tally.set(r.name, r.count);
+      this.reactionTallies.set(key, tally);
+    }
     return {
       nick,
       text,
       self: !!msg.user && msg.user === this.selfId,
       time: tsToIso(msg.ts),
+      reactions,
     };
   }
 

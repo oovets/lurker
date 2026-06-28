@@ -91,6 +91,8 @@ interface AnyEvent {
   nick?: string;
   text?: string;
   kind?: string;
+  slackTs?: string;
+  reactions?: Array<{ name: string; count: number }>;
 }
 
 beforeAll(async () => {
@@ -196,7 +198,7 @@ describe('SlackConnection', () => {
     expect(live?.text).toBe('hi @Alice see #general and the site (https://x.com) & @here');
   });
 
-  it('renders reactions as emoji shortcodes and marks thread replies', async () => {
+  it('marks thread replies, carries reaction chips, and updates them live', async () => {
     const user = createUser('rx');
     const net = createNetwork(user.id, {
       name: 'Slack',
@@ -216,7 +218,7 @@ describe('SlackConnection', () => {
 
     events.length = 0;
     const onMessage = h.handlers['message'];
-    // A threaded reply carrying reactions.
+    // A threaded reply carrying reactions (structured, not in the text).
     await onMessage({
       event: {
         channel: 'C1',
@@ -232,7 +234,26 @@ describe('SlackConnection', () => {
       ack: async () => {},
     });
     const live = events.find((e) => e.type === 'message');
-    expect(live?.text).toBe('↳ in the thread  ·  :tada: 3  :+1: 2');
+    expect(live?.text).toBe('↳ in the thread');
+    expect(live?.slackTs).toBe('1700000000.002000');
+    expect(live?.reactions).toEqual([
+      { name: 'tada', count: 3 },
+      { name: '+1', count: 2 },
+    ]);
+
+    // A live reaction_added bumps the tally and pushes the full updated set.
+    events.length = 0;
+    await h.handlers['reaction_added']({
+      event: { reaction: 'tada', item: { channel: 'C1', ts: '1700000000.002000' } },
+      ack: async () => {},
+    });
+    const rx = events.find((e) => e.type === 'reaction');
+    expect(rx?.target).toBe('#general');
+    expect(rx?.slackTs).toBe('1700000000.002000');
+    expect(rx?.reactions).toEqual([
+      { name: 'tada', count: 4 },
+      { name: '+1', count: 2 },
+    ]);
   });
 
   it('demo mode: builds a canned workspace + drips live messages, no real Slack', async () => {

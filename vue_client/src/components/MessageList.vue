@@ -113,6 +113,15 @@
               interactive-nicks
               @nick-click="onMentionMenu"
             />
+            <span v-if="reactionsOf(row.m).length" class="reactions">
+              <span
+                v-for="r in reactionsOf(row.m)"
+                :key="r.name"
+                class="reaction-chip"
+                :title="`:${r.name}:`"
+                >{{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}</span
+              >
+            </span>
           </span>
           <span class="time">{{ row.continuationTime ? '' : time(row.m?.time) }}</span>
         </template>
@@ -230,6 +239,15 @@
             <template v-else-if="row.m?.type === 'error'"
               ><LinkedText :text="row.m.text ?? ''"
             /></template>
+            <span v-if="reactionsOf(row.m).length" class="reactions">
+              <span
+                v-for="r in reactionsOf(row.m)"
+                :key="r.name"
+                class="reaction-chip"
+                :title="`:${r.name}:`"
+                >{{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}</span
+              >
+            </span>
           </span>
         </template>
         <div
@@ -297,6 +315,7 @@ import { collapseDisplay } from '../utils/collapseDisplay.js';
 import NickRef from './NickRef.vue';
 import LinkedText from './LinkedText.vue';
 import RenderSegments from './RenderSegments.vue';
+import { emojiGlyph } from '../utils/emojiShortcodes.js';
 import IgnoreModal from './IgnoreModal.vue';
 import { useMessageActions } from '../composables/useMessageActions.js';
 import type {
@@ -1148,6 +1167,16 @@ function bodyClass(m: ChatMessage | undefined) {
   };
 }
 
+// Emoji reaction chips (Slack). reactions ride on the message (from backlog +
+// live 'reaction' events); glyph falls back to the :shortcode: when the emoji
+// data hasn't loaded or the name is a custom workspace emoji.
+function reactionsOf(m: ChatMessage | undefined): Array<{ name: string; count: number }> {
+  return (m as { reactions?: Array<{ name: string; count: number }> } | undefined)?.reactions ?? [];
+}
+function reactionGlyph(name: string): string {
+  return emojiGlyph(name) || `:${name}:`;
+}
+
 // True for any line type whose body is just `m.text` and should be split
 // through the nick-coloring helper. Action lines render their author's nick
 // at the start of the body, with `m.text` after.
@@ -1896,6 +1925,26 @@ watch(
 }
 .body.italic {
   font-style: italic;
+}
+/* Slack reaction chips: a wrap of small pills under the message text. */
+.reactions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-left: 1ch;
+  vertical-align: baseline;
+}
+.reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25ch;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1, 4px);
+  color: var(--fg-muted);
+  background: var(--bg-soft);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* .msg-link styling lives in src/assets/main.css (shared with the topic bar). */
 

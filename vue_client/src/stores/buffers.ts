@@ -116,6 +116,10 @@ export interface BufferMessage {
   nick?: string;
   body?: string;
   createdAt?: string;
+  // Slack provider extras (absent on IRC): the source message id used to target
+  // live reaction updates, and the current emoji reaction chips.
+  slackTs?: string;
+  reactions?: Array<{ name: string; count: number }>;
   [key: string]: unknown;
 }
 
@@ -676,6 +680,21 @@ export const useBuffersStore = defineStore('buffers', {
     setTopic(networkId: number | string, target: string, topic: string | null) {
       const buf = ensureBuffer(this, networkId, target);
       buf.topic = topic;
+    },
+    // Live reaction update (Slack): find the message by its provider id
+    // (slackTs, carried on the event) and replace its chip set in place. No new
+    // row — the existing message just re-renders its reactions.
+    applyReaction(
+      networkId: number | string,
+      target: string,
+      slackTs: string,
+      reactions: Array<{ name: string; count: number }>,
+    ) {
+      if (!slackTs) return;
+      const buf = this.findByTarget(networkId, target);
+      if (!buf) return;
+      const msg = buf.messages.find((m) => m.slackTs === slackTs);
+      if (msg) msg.reactions = reactions.length ? reactions : undefined;
     },
     setChannelModes(networkId: number | string, target: string, modes: string) {
       const buf = ensureBuffer(this, networkId, target);

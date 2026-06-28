@@ -144,6 +144,11 @@ function applyEvent(event: any): void {
     case 'own-nick':
       networks.applyOwnNick(event);
       break;
+    case 'reaction':
+      // Slack live reaction add/remove — updates an existing message's chips,
+      // not a new row, so it doesn't go through pushMessage.
+      buffers.applyReaction(event.networkId, event.target, event.slackTs, event.reactions);
+      break;
     case 'topic':
       if (!buffers.pushMessage(event)) break;
       buffers.setTopic(event.networkId, event.target, event.text);
