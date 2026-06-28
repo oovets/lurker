@@ -185,6 +185,26 @@ describe('SlackConnection', () => {
     });
   });
 
+  it('encodes @name mentions into <@id> so Slack notifies', async () => {
+    const user = createUser('mentioner');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const conn = new SlackConnection({ network: net!, onEvent: () => {} });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    h.posts.length = 0;
+    conn.say('#general', 'hey @alice and @Alice, ping?');
+    await Promise.resolve();
+    expect(h.posts[0]?.text).toBe('hey <@U1> and <@U1>, ping?');
+  });
+
   it('names app/bot messages instead of showing "unknown"', async () => {
     const user = createUser('bots');
     const net = createNetwork(user.id, {

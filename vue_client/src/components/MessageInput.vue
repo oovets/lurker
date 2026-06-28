@@ -295,6 +295,16 @@ const emojiPickerEl = ref<InstanceType<typeof EmojiPicker> | null>(null);
 
 const active = computed(() => networks.activeBuffer);
 
+// Slack buffers complete nicks as `@name ` (and the server encodes that into a
+// real `<@id>` mention so notifications fire); IRC keeps its bare-nick / `nick:`
+// addressing.
+const isSlackComposer = computed(() => {
+  const a = active.value;
+  if (!a) return false;
+  const net = networks.networkById(a.networkId) as { provider?: string } | null;
+  return net?.provider === 'slack';
+});
+
 // The app-scoped system buffer (issue #355) has no network, so networks
 // .activeBuffer reports null for it. It accepts slash commands, not chat, so it
 // gets a local-only input ref rather than a server-synced per-buffer draft (no
@@ -680,7 +690,11 @@ function buildChannelMatches(networkId: number, prefix: string): string[] {
 function applyCompletion() {
   if (!completion || !completion.matches.length) return;
   const pick = completion.matches[completion.index];
-  const suffix = completion.atLineStart && !completion.isChannel ? ': ' : '';
+  // Slack: prepend `@` (unless already there) and use a plain space; IRC keeps
+  // the `nick: ` line-start addressing form.
+  const slackNick = isSlackComposer.value && !completion.isChannel;
+  const mention = slackNick && !completion.prefix.endsWith('@') ? '@' : '';
+  const suffix = slackNick ? ' ' : completion.atLineStart && !completion.isChannel ? ': ' : '';
   // Tab-completion owns the input now; any open @-picker or mobile suggestion
   // strip would be stale (cycling suppresses onInput → refreshPicker doesn't
   // fire, so they wouldn't close on their own).
@@ -688,10 +702,10 @@ function applyCompletion() {
   closeStrip();
   closeChannelPicker();
   cycling = true;
-  text.value = completion.prefix + pick + suffix + completion.tail;
+  text.value = completion.prefix + mention + pick + suffix + completion.tail;
   cycling = false;
   // Move caret to just after the inserted nick + suffix.
-  const caret = completion.prefix.length + pick.length + suffix.length;
+  const caret = completion.prefix.length + mention.length + pick.length + suffix.length;
   // Set on the next tick so v-model has propagated.
   queueMicrotask(() => {
     const el = inputEl.value;
@@ -1374,15 +1388,17 @@ function onPickerSelect(nick: string): void {
   // gets a bare space. Identical to the mobile strip (onStripSelect). Tab-
   // completion shares the isAtLineStart() check but appends nothing
   // mid-sentence, since it cycles the completion in place.
-  const suffix = isAtLineStart(before) ? ': ' : ' ';
+  // Slack: re-add the `@` the trigger token consumed and always use a space.
+  const mention = isSlackComposer.value ? '@' : '';
+  const suffix = isSlackComposer.value ? ' ' : isAtLineStart(before) ? ': ' : ' ';
   cycling = true;
-  text.value = before + nick + suffix + after;
+  text.value = before + mention + nick + suffix + after;
   cycling = false;
   closePicker();
   queueMicrotask(() => {
     const el = inputEl.value;
     if (!el) return;
-    const caret = before.length + nick.length + suffix.length;
+    const caret = before.length + mention.length + nick.length + suffix.length;
     el.focus();
     el.setSelectionRange(caret, caret);
   });
@@ -1424,15 +1440,17 @@ function onStripSelect(nick: string): void {
   // A nick at the start of a line is being addressed → ': '; mid-sentence
   // gets a bare space (what the old @-menu was missing — task #198). Shares
   // isAtLineStart() with Tab-completion and the desktop picker.
-  const suffix = isAtLineStart(before) ? ': ' : ' ';
+  // Slack: re-add the `@` the strip token consumed and always use a space.
+  const mention = isSlackComposer.value ? '@' : '';
+  const suffix = isSlackComposer.value ? ' ' : isAtLineStart(before) ? ': ' : ' ';
   cycling = true;
-  text.value = before + nick + suffix + after;
+  text.value = before + mention + nick + suffix + after;
   cycling = false;
   closeStrip();
   queueMicrotask(() => {
     const el = inputEl.value;
     if (!el) return;
-    const caret = before.length + nick.length + suffix.length;
+    const caret = before.length + mention.length + nick.length + suffix.length;
     el.focus();
     el.setSelectionRange(caret, caret);
   });

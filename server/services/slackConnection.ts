@@ -115,6 +115,10 @@ export class SlackConnection implements Connection {
   protected idToTarget = new Map<string, string>();
   // User id → display name cache (users.list seed + users.info fallback).
   protected userNames = new Map<string, string>();
+  // Reverse map (lowercased display name AND handle → user id) so an outgoing
+  // `@name` can be encoded to Slack's `<@id>` mention syntax — the only form
+  // that actually notifies the user.
+  protected nameToId = new Map<string, string>();
   // Bot id → name cache (bots.info), for app/bot messages that carry no user.
   protected botNames = new Map<string, string>();
   // De-dup key `${channelId}:${ts}` so a message present in both the history
@@ -406,13 +410,23 @@ export class SlackConnection implements Connection {
 
   // ── Outbound ──────────────────────────────────────────────────────────────
 
+  // Encode `@name` (or `@handle`) mentions into Slack's `<@id>` syntax — the
+  // only form that notifies the mentioned user. Unknown names are left as-is.
+  protected encodeMentions(text: string): string {
+    return text.replace(/@([a-z0-9._-]+)/gi, (whole, name: string) => {
+      const id = this.nameToId.get(name.toLowerCase());
+      return id ? `<@${id}>` : whole;
+    });
+  }
+
   say(target: string, text: string): void {
     // A thread buffer posts to its parent channel with thread_ts.
     const thread = this.threads.get(target.toLowerCase());
     const channel = thread?.channelId ?? this.targetToId.get(target.toLowerCase());
     if (!channel || !this.web) return;
+    const encoded = this.encodeMentions(text);
     void this.web.chat
-      .postMessage({ channel, text, ...(thread ? { thread_ts: thread.threadTs } : {}) })
+      .postMessage({ channel, text: encoded, ...(thread ? { thread_ts: thread.threadTs } : {}) })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         this.publishEphemeral({
@@ -474,13 +488,21 @@ export class SlackConnection implements Connection {
       do {
         const res = await this.web.users.list({ limit: 200, cursor });
         for (const u of res.members || []) {
-          if (u.id) this.userNames.set(u.id, displayNameOf(u));
+          if (u.id) this.rememberUser(u.id, displayNameOf(u), u.name);
         }
         cursor = res.response_metadata?.next_cursor || undefined;
       } while (cursor && ++pages < 10);
     } catch {
       /* lazy resolution covers the gaps */
     }
+  }
+
+  // Cache a user's name forwards (id→name, for rendering) and backwards
+  // (name/handle→id, for encoding outgoing @mentions).
+  protected rememberUser(id: string, name: string, handle?: string): void {
+    this.userNames.set(id, name);
+    if (name) this.nameToId.set(name.toLowerCase(), id);
+    if (handle) this.nameToId.set(handle.toLowerCase(), id);
   }
 
   protected async resolveUserName(id: string | undefined): Promise<string> {
@@ -491,7 +513,7 @@ export class SlackConnection implements Connection {
     try {
       const res = await this.web.users.info({ user: id });
       const name = res.user ? displayNameOf(res.user) : id;
-      this.userNames.set(id, name);
+      this.rememberUser(id, name, res.user?.name);
       return name;
     } catch {
       this.userNames.set(id, id);
