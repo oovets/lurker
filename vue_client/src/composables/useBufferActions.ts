@@ -7,6 +7,9 @@ import { useChannelNotifyStore } from '../stores/channelNotify.js';
 import { useNickNotesStore } from '../stores/nickNotes.js';
 import { useFriendsStore } from '../stores/friends.js';
 import { useWhoisStore } from '../stores/whois.js';
+import { useNetworksStore } from '../stores/networks.js';
+import { useBuffersStore } from '../stores/buffers.js';
+import { useViewport } from './useViewport.js';
 import { useContextMenu } from './useContextMenu.js';
 import { socketSend } from './useSocket.js';
 
@@ -33,6 +36,9 @@ export function useBufferActions(): BufferActionsAPI {
   const nickNotes = useNickNotesStore();
   const friends = useFriendsStore();
   const whois = useWhoisStore();
+  const networks = useNetworksStore();
+  const buffers = useBuffersStore();
+  const { isMobile } = useViewport();
   const menu = useContextMenu();
 
   function buildItems(buf: BufferLike | null | undefined): ContextMenuItem[] {
@@ -58,6 +64,17 @@ export function useBufferActions(): BufferActionsAPI {
             onClick: () => pins.pin(networkId, buf.target),
           },
     ];
+    // Open this buffer alongside the current one in a fresh split pane. Desktop
+    // only — the mobile layout shows a single buffer at a time, so a hidden
+    // extra pane would be confusing. Open the pane first, then load the buffer
+    // into it (and focus it) via the paneId.
+    if (!isMobile.value) {
+      items.push({
+        label: 'Open in Split',
+        icon: 'fa-solid fa-table-columns',
+        onClick: () => buffers.activate(networkId, buf.target, { paneId: networks.openPane(null) }),
+      });
+    }
     if (isChannel) {
       const isAlwaysNotify = channelNotify.notifyAlways(networkId, buf.target);
       items.push(

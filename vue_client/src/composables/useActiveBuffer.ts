@@ -1,14 +1,15 @@
 // Copyright (c) 2026 Brad Root
 // SPDX-License-Identifier: MPL-2.0
 
-import type { ComputedRef, Ref } from 'vue';
-import { computed } from 'vue';
+import type { ComputedRef, MaybeRefOrGetter, Ref } from 'vue';
+import { computed, toRef } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useNetworksStore } from '../stores/networks.js';
 import { useBuffersStore } from '../stores/buffers.js';
 import {
   FRIENDS_KEY,
   SYSTEM_KEY,
+  isVirtualKey,
   virtualConfig,
   type VirtualRenderMode,
 } from '../lib/virtualBuffers.js';
@@ -32,12 +33,27 @@ export interface ActiveBufferState {
   hasNicklist: ComputedRef<boolean>;
 }
 
-export function useActiveBuffer(): ActiveBufferState {
+// `keyArg` lets a caller scope the returned state to a specific buffer key
+// instead of the focused pane — ChatPane passes its pane's key so each pane
+// renders its own header/messages/nicklist. Omitted, it falls back to the
+// focused pane's activeKey (the original single-buffer behavior), so every
+// existing caller is unchanged.
+export function useActiveBuffer(keyArg?: MaybeRefOrGetter<string | null>): ActiveBufferState {
   const networks = useNetworksStore();
   const buffers = useBuffersStore();
-  const { activeKey } = storeToRefs(networks);
+  const { activeKey: focusedKey } = storeToRefs(networks);
+  const activeKey = keyArg != null ? toRef(keyArg) : focusedKey;
 
-  const active = computed(() => networks.activeBuffer);
+  // Per-key analog of networks.activeBuffer: derive the {networkId, target,
+  // network} triple from this pane's key so panes scoped via keyArg don't all
+  // report the focused pane's buffer.
+  const active = computed(() => {
+    const k = activeKey.value;
+    if (!k || isVirtualKey(k) || !k.includes('::')) return null;
+    const [networkId, name] = k.split('::');
+    const id = Number(networkId);
+    return { networkId: id, target: name, network: networks.networkById(id) ?? undefined };
+  });
   const virtualCfg = computed(() => virtualConfig(activeKey.value));
   const isVirtual = computed(() => virtualCfg.value != null);
   const isSystemBuffer = computed(() => activeKey.value === SYSTEM_KEY);

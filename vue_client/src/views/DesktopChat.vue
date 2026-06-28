@@ -8,7 +8,6 @@
     class="chat"
     :class="{
       'sidebar-collapsed': !showChannels,
-      'members-collapsed': !showMembers,
       'system-active': isSystemBuffer,
     }"
     @click="onChatClick"
@@ -43,120 +42,21 @@
       </div>
     </aside>
 
-    <header v-if="isVirtual" class="topic">
-      <div class="topic-meta">
-        <span class="buffer">{{ bufferLabel }}</span>
-      </div>
-      <div v-if="isFriendsBuffer" class="topic-actions">
-        <button
-          type="button"
-          class="link"
-          title="Add friend"
-          aria-label="Add friend"
-          @click="friends.openEditorNew()"
-        >
-          <i class="fa-solid fa-person-circle-plus"></i>
-        </button>
-        <span
-          class="member-count"
-          :title="`${friendCount} ${friendCount === 1 ? 'friend' : 'friends'}`"
-        >
-          <i class="fa-solid fa-users"></i> {{ friendCount }}
-        </span>
-      </div>
-    </header>
-    <header v-else-if="active" class="topic">
-      <div class="topic-meta">
-        <span class="buffer">{{ bufferLabel }}</span>
-        <template v-if="topic">
-          <span class="sep">│</span>
-          <button
-            type="button"
-            class="topic-text"
-            title="View full topic"
-            @click="showTopic = true"
-          >
-            <LinkedText :text="topic" />
-          </button>
-        </template>
-      </div>
-      <div class="topic-actions">
-        <template v-if="isServerBuffer">
-          <button
-            type="button"
-            class="link"
-            title="Channel list"
-            aria-label="Channel list"
-            @click="active && channelListModal.open(active.networkId)"
-          >
-            <i class="fa-solid fa-hashtag"></i>
-          </button>
-          <button
-            type="button"
-            class="link"
-            :title="serverConnectActionLabel"
-            :aria-label="serverConnectActionLabel"
-            @click="toggleServerConnection"
-          >
-            <i :class="serverConnectActionIcon"></i>
-          </button>
-          <button class="link" title="Edit network" @click="editActiveNetwork">
-            <i class="fa-solid fa-gear"></i>
-          </button>
-        </template>
-        <template v-else-if="isDmHeader">
-          <button
-            type="button"
-            class="link"
-            title="View profile"
-            aria-label="View profile"
-            @click="openDmProfile"
-          >
-            <i class="fa-solid fa-id-card"></i>
-          </button>
-          <button
-            type="button"
-            class="link"
-            :title="dmNoteLabel"
-            :aria-label="dmNoteLabel"
-            @click="openDmNote"
-          >
-            <i class="fa-solid fa-note-sticky"></i>
-          </button>
-        </template>
-        <template v-else-if="isChannel">
-          <button
-            type="button"
-            class="link notify"
-            :class="{ on: channelNotifyAlways }"
-            :title="channelNotifyLabel"
-            :aria-label="channelNotifyLabel"
-            @click="toggleChannelNotify"
-          >
-            <i :class="channelNotifyAlways ? 'fa-solid fa-bell' : 'fa-regular fa-bell'"></i>
-          </button>
-          <button
-            class="link"
-            :title="showMembers ? 'Hide members' : 'Show members'"
-            :aria-label="showMembers ? 'Hide members' : 'Show members'"
-            @click="toggleMembers"
-          >
-            <i class="fa-solid fa-users"></i>
-          </button>
-          <span
-            v-if="memberCount != null"
-            class="member-count"
-            :title="`${memberCount} ${memberCount === 1 ? 'user' : 'users'} in channel`"
-            >{{ memberCount }}</span
-          >
-        </template>
-      </div>
-    </header>
-    <div v-if="active || isVirtual" class="topic-divider"></div>
-
-    <FriendsOverview v-if="renderMode === 'overview'" @view-activity="onViewActivity" />
-    <MessageList v-else ref="messageListRef" :pending-scroll-id="pendingScrollId" />
-    <MemberList v-if="showMembers && hasNicklist" />
+    <div class="panes" :style="{ '--pane-cols': gridCols, '--pane-rows': gridRows }">
+      <ChatPane
+        v-for="(pane, i) in networks.panes"
+        :key="pane.id"
+        :ref="(el) => setPaneRef(pane.id, el)"
+        :pane="pane"
+        :pending-scroll-id="pendingScrollId"
+        :style="
+          i === networks.panes.length - 1 && lastSpan > 1
+            ? { gridColumn: `span ${lastSpan}` }
+            : undefined
+        "
+        @view-activity="onViewActivity"
+      />
+    </div>
     <StatusBar />
     <MessageInput v-if="hasInput" ref="messageInputRef" />
 
@@ -171,12 +71,6 @@
       @jump="onJumpToMessage"
     />
     <BookmarksModal v-if="showBookmarks" @close="showBookmarks = false" @jump="onJumpToMessage" />
-    <TopicModal
-      v-if="showTopic && active"
-      :topic="topic"
-      :label="bufferLabel"
-      @close="showTopic = false"
-    />
     <ChannelListModal
       v-if="channelListModal.isOpen && channelListModal.networkId !== null"
       :network-id="channelListModal.networkId!"
@@ -211,8 +105,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { Network } from '../stores/networks.js';
-import { useBuffersStore, type Buffer } from '../stores/buffers.js';
+import { useBuffersStore } from '../stores/buffers.js';
 import { SYSTEM_KEY } from '../lib/virtualBuffers.js';
 import { useSocket } from '../composables/useSocket.js';
 import { useNetworksStore } from '../stores/networks.js';
@@ -220,16 +113,12 @@ import { useChatBootstrap } from '../composables/useChatBootstrap.js';
 import { useActiveBuffer } from '../composables/useActiveBuffer.js';
 import { useSettingsStore } from '../stores/settings.js';
 import BufferList from '../components/BufferList.vue';
-import MessageList from '../components/MessageList.vue';
-import FriendsOverview from '../components/FriendsOverview.vue';
+import ChatPane from '../components/ChatPane.vue';
 import MessageInput from '../components/MessageInput.vue';
-import MemberList from '../components/MemberList.vue';
 import StatusBar from '../components/StatusBar.vue';
 import NetworkForm from '../components/NetworkForm.vue';
 import HighlightsModal from '../components/HighlightsModal.vue';
 import BookmarksModal from '../components/BookmarksModal.vue';
-import LinkedText from '../components/LinkedText.vue';
-import TopicModal from '../components/TopicModal.vue';
 import ChannelListModal from '../components/ChannelListModal.vue';
 import RecentUploadsModal from '../components/RecentUploadsModal.vue';
 import QuickSwitcher from '../components/QuickSwitcher.vue';
@@ -240,12 +129,10 @@ import ConfigureFriendModal from '../components/ConfigureFriendModal.vue';
 import UserProfileModal from '../components/UserProfileModal.vue';
 import ImageViewerModal from '../components/ImageViewerModal.vue';
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts.js';
-import { useNicklistCollapseStore } from '../stores/nicklistCollapse.js';
 import { useNickNotesStore } from '../stores/nickNotes.js';
 import { useFriendsStore } from '../stores/friends.js';
 import { useSearchStore } from '../stores/search.js';
 import { useWhoisStore } from '../stores/whois.js';
-import { useChannelNotifyStore } from '../stores/channelNotify.js';
 import { useChannelListModal } from '../composables/useChannelListModal.js';
 import { useImageModal } from '../composables/useImageModal.js';
 import { useNetworkEditor } from '../composables/useNetworkEditor.js';
@@ -267,35 +154,23 @@ useSocket();
 onMounted(() => {
   if (networks.activeKey == null) buffers.activate(null, SYSTEM_KEY);
 });
-const {
-  active,
-  activeBuf,
-  topic,
-  isServerBuffer,
-  isChannel,
-  bufferLabel,
-  isSystemBuffer,
-  isVirtual,
-  isFriendsBuffer,
-  renderMode,
-  hasInput,
-  hasNicklist,
-} = useActiveBuffer();
+// Focused-pane state for the shell's own bits: the type-ahead guard (don't
+// grab focus when no real buffer is active), the system-active input border,
+// and whether to render the single shared input. Per-pane header/messages/
+// nicklist live in ChatPane now.
+const { active, isSystemBuffer, hasInput } = useActiveBuffer();
 
 const settings = useSettingsStore();
-const nicklistCollapse = useNicklistCollapseStore();
+// Stores read by the shell-level modals rendered below (profile, note, friend).
 const nickNotes = useNickNotesStore();
 const friends = useFriendsStore();
-const friendCount = computed(() => friends.contacts.length);
 const whois = useWhoisStore();
-const channelNotify = useChannelNotifyStore();
 
 const channelListModal = reactive(useChannelListModal());
 const imageModal = reactive(useImageModal());
 const networkEditor = reactive(useNetworkEditor());
 const showHighlights = ref(false);
 const showBookmarks = ref(false);
-const showTopic = ref(false);
 const showUploads = ref(false);
 const showSwitcher = ref(false);
 const showSearch = ref(false);
@@ -309,7 +184,26 @@ function onViewActivity(query: string) {
   showSearch.value = true;
 }
 const messageInputRef = ref<{ focus: () => void } | null>(null);
-const messageListRef = ref<{ scrollByPage: (dir: number) => void } | null>(null);
+// One ChatPane handle per pane id, so keyboard PageUp/Down scrolls the FOCUSED
+// pane's message list. Vue calls the function ref with the instance on mount
+// and null on unmount, so the map stays in sync as panes open/close.
+const paneRefs = new Map<string, { scrollByPage: (dir: number) => void }>();
+function setPaneRef(id: string, el: unknown) {
+  if (el) paneRefs.set(id, el as { scrollByPage: (dir: number) => void });
+  else paneRefs.delete(id);
+}
+
+// Auto-wrapping 2D grid for the panes. Columns grow as the square root of the
+// pane count so the layout stays balanced (1→1×1, 2→2×1, 3→2×2, 4→2×2, 5→3×2…)
+// instead of an ever-thinner single row. A short last row is filled by spanning
+// its final pane across the leftover columns, so there's no empty cell.
+const paneCount = computed(() => networks.panes.length);
+const gridCols = computed(() => Math.ceil(Math.sqrt(paneCount.value)));
+const gridRows = computed(() => Math.ceil(paneCount.value / gridCols.value));
+const lastSpan = computed(() => {
+  const lastRowCount = paneCount.value - (gridRows.value - 1) * gridCols.value;
+  return gridCols.value - lastRowCount + 1;
+});
 
 // Any modal open? Type-ahead must not steal focus from a modal's own fields.
 const anyModalOpen = computed(
@@ -317,7 +211,6 @@ const anyModalOpen = computed(
     networkEditor.isOpen ||
     showHighlights.value ||
     showBookmarks.value ||
-    showTopic.value ||
     channelListModal.isOpen ||
     imageModal.isOpen ||
     showUploads.value ||
@@ -342,7 +235,7 @@ useKeyboardShortcuts({
   },
   onScrollMessages: (dir) => {
     if (anyModalOpen.value) return;
-    messageListRef.value?.scrollByPage(dir);
+    paneRefs.get(networks.focusedPaneId)?.scrollByPage(dir);
   },
 });
 
@@ -392,79 +285,8 @@ watch(showChannels, async (open) => {
 });
 onMounted(measureFootWrap);
 
-// True when the active buffer is a DM (not a channel, not the network's
-// server buffer). Drives the clickable DM header that opens the user
-// profile modal — channel headers stay non-interactive.
-const isDmHeader = computed(() => {
-  if (!active.value) return false;
-  if (isChannel.value || isServerBuffer.value) return false;
-  return true;
-});
-function openDmProfile() {
-  if (!active.value) return;
-  whois.openViewer(active.value.networkId, active.value.target);
-}
-// DM note button — mirrors the old context-menu entry, surfaced inline so the
-// per-peer note is one click from the conversation. Label flips once a note
-// exists so the button doubles as a "has a note" tell.
-const dmNoteLabel = computed(() =>
-  active.value && nickNotes.hasNote(active.value.networkId, active.value.target)
-    ? 'Edit note'
-    : 'Add note',
-);
-function openDmNote() {
-  if (!active.value) return;
-  nickNotes.openEditor(active.value.networkId, active.value.target);
-}
-
-// Channel "always notify" toggle — the one non-pin, non-close action from the
-// buffer menu, promoted to an inline button (pin/close stay buffer-list
-// concerns, reachable by right-clicking the sidebar row). The bell fills and
-// goes accent when the override is on.
-const channelNotifyAlways = computed(() => {
-  if (!isChannel.value || !active.value) return false;
-  return channelNotify.notifyAlways(active.value.networkId, active.value.target);
-});
-const channelNotifyLabel = computed(() =>
-  channelNotifyAlways.value ? 'Stop always notifying' : 'Always notify',
-);
-function toggleChannelNotify() {
-  if (!isChannel.value || !active.value) return;
-  channelNotify.setNotifyAlways(
-    active.value.networkId,
-    active.value.target,
-    !channelNotifyAlways.value,
-  );
-}
-
-// User count for the active channel buffer. Sits in the topic bar (next to
-// the members-toggle button) rather than the status bar — the count is a
-// property of the channel, so the channel header is the natural home.
-const memberCount = computed(() => {
-  if (!isChannel.value) return null;
-  return (activeBuf.value as Buffer | null)?.members?.length ?? null;
-});
-
-// Per-channel nicklist visibility. A channel the user has explicitly toggled
-// carries an override (true = collapsed); otherwise the global
-// look.layout.show_member_list default applies. DMs and server buffers have no
-// member list at all, so the toggle and panel are hidden for them entirely.
-const showMembers = computed(() => {
-  if (!isChannel.value || !active.value) return false;
-  const { networkId, target } = active.value;
-  const override = nicklistCollapse.override(networkId, target);
-  if (override !== undefined) return !override;
-  return settings.effective('look.layout.show_member_list');
-});
-
 function toggleChannels() {
   settings.setValue('look.layout.show_channel_list', !showChannels.value);
-}
-function toggleMembers() {
-  if (!isChannel.value || !active.value) return;
-  const { networkId, target } = active.value;
-  // Pass the current visibility through as the new collapsed flag — it flips.
-  nicklistCollapse.setCollapsed(networkId, target, !!showMembers.value);
 }
 
 // Forward stray clicks anywhere in the chat frame (topic bar, message list,
@@ -501,90 +323,37 @@ function closeNetworkForm() {
   networkEditor.close();
 }
 
-function editActiveNetwork() {
-  const net = active.value?.network as Network | undefined;
-  if (net) networkEditor.open(net);
-}
-
-// State-aware connect/disconnect for the server buffer header. We label the
-// button "Disconnect" only while we're confidently connected; every other
-// state (idle, connecting, reconnecting, disconnected, unknown) reads as
-// "Reconnect" because the action — fire a fresh connect — is the same in
-// each case, and "Reconnect" is what the user reaches for when something
-// looks stuck.
-const serverConnectionState = computed(() => {
-  if (!active.value || !isServerBuffer.value) return null;
-  return networks.states[active.value.networkId]?.state ?? null;
-});
-const serverConnectActionLabel = computed(() =>
-  serverConnectionState.value === 'connected' ? 'Disconnect' : 'Reconnect',
-);
-const serverConnectActionIcon = computed(() =>
-  serverConnectionState.value === 'connected'
-    ? 'fa-solid fa-plug-circle-xmark'
-    : 'fa-solid fa-plug',
-);
-function toggleServerConnection() {
-  if (!active.value) return;
-  const id = active.value.networkId;
-  // Fire-and-forget — the button's label is driven by networks.states so
-  // success reflects itself. A failed call stays observable via the state
-  // (label doesn't flip), so we just log and let the user retry rather
-  // than wiring a toast through the topic bar for this case.
-  const p =
-    serverConnectionState.value === 'connected' ? networks.disconnect(id) : networks.reconnect(id);
-  p.catch((err) => console.error('[DesktopChat] toggle server connection failed', err));
-}
-
 useChatBootstrap({ onJump: onJumpToMessage });
 </script>
 
 <style scoped>
-/* WeeChat-style frame: the sidebar runs full height on the left; the topic
-   and input bars span the full width to the right of it; and the message
-   list + nicklist sit between them.
+/* WeeChat-style frame: the sidebar runs full height on the left; the panes row
+   fills the middle; and the status + input bars span the full width to the
+   right of the sidebar at the bottom.
 
-   The sidebar and member-list columns are sized via CSS custom properties
-   so the .sidebar-collapsed / .members-collapsed modifier classes can shrink
-   either side to a 36px rail without touching the rest of the grid. */
+   The per-pane topic/divider/messages/members layout now lives inside ChatPane
+   (one column per split pane). DesktopChat only owns the outer sidebar | content
+   split and the single shared status + input. The sidebar width is a custom
+   property so .sidebar-collapsed can shrink it to a 36px rail. */
 .chat {
   --sidebar-w: 220px;
-  --members-w: 180px;
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr var(--members-w);
-  /* The 1px row owns the topic/messages divider as its own grid track,
-     outside the scroll container. Putting the line inside .message-list
-     (border-top, inset box-shadow) lets row backgrounds and hover states
-     paint over it as content scrolls past — the line appears to be eaten
-     by the scrolling rows. A dedicated row sits between the two children
-     and nothing can paint on top of it. */
-  grid-template-rows: auto auto 1fr auto auto;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: 1fr auto auto;
   grid-template-areas:
-    'sidebar topic    topic'
-    'sidebar divider  divider'
-    'sidebar messages members'
-    'sidebar status   status'
-    'sidebar input    input';
+    'sidebar panes'
+    'sidebar status'
+    'sidebar input';
   /* Height sized to the dynamic viewport. iOS scrolls the page
      naturally when the keyboard opens; the input row at the bottom
      stays visible above the keyboard, and the upper portion (sidebar,
-     topic, older messages) scrolls off the top of the visible area.
+     panes, older messages) scrolls off the top of the visible area.
      See issue #85. */
   height: 100dvh;
   overflow: hidden;
 }
 .chat.sidebar-collapsed {
   --sidebar-w: 36px;
-}
-/* Members column fully collapses — no rail. The reopen toggle lives in the
-   topic bar on the right, so there's nothing to leave behind. */
-.chat.members-collapsed {
-  --members-w: 0px;
-}
-/* System console has no member list — collapse the rail so the log pane
-   spans the full content width instead of leaving an empty column. */
-.chat.system-active {
-  --members-w: 0px;
 }
 /* The status bar carries the separator border above the input, but it's hidden
    in the system buffer (no network state to show). Give the input its own top
@@ -596,6 +365,30 @@ useChatBootstrap({ onJump: onJumpToMessage });
 .chat > * {
   min-width: 0;
   min-height: 0;
+}
+
+/* The panes area: an auto-wrapping 2D grid of ChatPane cells. --pane-cols and
+   --pane-rows are set inline from the pane count (see gridCols/gridRows), and
+   `1px` gaps over a --border background paint the dividing lines between panes
+   in both axes — vertical rules between columns, horizontal rules between rows.
+   minmax(0, 1fr) lets the scrolling message lists shrink inside their cells. */
+.panes {
+  grid-area: panes;
+  display: grid;
+  grid-template-columns: repeat(var(--pane-cols, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--pane-rows, 1), minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.panes > .pane {
+  min-width: 0;
+  min-height: 0;
+  /* Cover the --border container background; the 1px gaps stay visible as the
+     inter-pane divider lines. */
+  background: var(--bg);
 }
 
 .sidebar {
@@ -686,95 +479,15 @@ useChatBootstrap({ onJump: onJumpToMessage });
   border-color: var(--border);
 }
 
-.topic {
-  grid-area: topic;
-  padding: var(--space-4) var(--space-6);
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.topic-divider {
-  grid-area: divider;
-  background: var(--border);
-  height: 1px;
-}
-.topic .buffer {
-  color: var(--accent);
-}
-.topic .sep {
-  color: var(--border);
-}
-.topic .topic-text {
-  color: var(--fg-muted);
-  text-overflow: ellipsis;
-  overflow: hidden;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  white-space: nowrap;
-  min-width: 0;
-}
-.topic .topic-text:hover {
-  color: var(--fg);
-}
-.topic .topic-text:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
-}
-
 /* These selectors target the root elements of the imported components.
    Vue 3 scoped CSS attaches the parent's data-v attribute to a child
-   component's root element, so .message-list / .members / .input here
-   match the rendered roots of MessageList / MemberList / MessageInput. */
-.message-list {
-  grid-area: messages;
-}
-.members {
-  grid-area: members;
-  border-left: 1px solid var(--border);
-}
+   component's root element, so .status-bar / .input here match the rendered
+   roots of StatusBar / MessageInput. (The per-pane topic/messages/members
+   styling now lives in ChatPane.) */
 .status-bar {
   grid-area: status;
 }
 .input {
   grid-area: input;
-}
-
-/* Two-group layout for the topic bar: .topic-meta (name + │ + topic text)
-   sits left, .topic-actions (buffer/network/channel buttons) sits right.
-   .topic uses justify-content:space-between to split them. .topic-meta
-   shrinks first via min-width:0 + topic-text ellipsis, so the action
-   cluster stays anchored to the right edge. */
-.topic-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 1ch;
-  min-width: 0;
-  overflow: hidden;
-}
-.topic-actions {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-  flex-shrink: 0;
-}
-/* The always-notify bell reads as off (muted) until the override is on, when
-   it fills and switches to accent — distinct from the always-accent toggle
-   buttons beside it. */
-.topic-actions .notify {
-  color: var(--fg-muted);
-}
-.topic-actions .notify.on {
-  color: var(--accent);
-}
-.topic .member-count {
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
 }
 </style>

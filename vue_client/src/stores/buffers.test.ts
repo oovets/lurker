@@ -8,7 +8,13 @@ import { setActivePinia, createPinia } from 'pinia';
 // under test only consult useNetworksStore().activeKey and setActive(), so a
 // minimal mutable mock covers it; toasts/socket are stubbed so importing the
 // store doesn't stand up the rest of the graph.
-const h = vi.hoisted(() => ({ activeKey: null as string | null }));
+// `activeKey` is the focused pane's buffer; `extraPaneKeys` simulates buffers
+// shown in OTHER split panes, so activate()'s "don't reset a buffer another
+// pane still shows" guard can be exercised.
+const h = vi.hoisted(() => ({
+  activeKey: null as string | null,
+  extraPaneKeys: [] as string[],
+}));
 
 vi.mock('./networks.js', () => ({
   useNetworksStore: () => ({
@@ -18,6 +24,20 @@ vi.mock('./networks.js', () => ({
     set activeKey(v: string | null) {
       h.activeKey = v;
     },
+    // Single-pane simulation: the real store now drives activate() through a
+    // panes array + focused pane. Mirror that surface against h.activeKey so
+    // the case-folding/fork assertions still exercise the same paths.
+    focusedPaneId: 'pane-0',
+    get panes() {
+      return [
+        { id: 'pane-0', key: h.activeKey },
+        ...h.extraPaneKeys.map((k, i) => ({ id: `extra-${i}`, key: k })),
+      ];
+    },
+    get paneKeys() {
+      return [h.activeKey, ...h.extraPaneKeys].filter((k): k is string => k != null);
+    },
+    setFocusedPane() {},
     // Mirrors the real store: activeKey = `${networkId}::${target}`.
     setActive(networkId: number | string, target: string) {
       h.activeKey = `${networkId}::${target}`;
@@ -38,6 +58,7 @@ const netBuffers = (store: ReturnType<typeof useBuffersStore>) =>
 beforeEach(() => {
   setActivePinia(createPinia());
   h.activeKey = null;
+  h.extraPaneKeys = [];
   vi.mocked(socketSend).mockClear();
 });
 
@@ -117,6 +138,45 @@ describe('applyReadState', () => {
 
     store.applyReadState(1, '#pinned', { lastReadId: 70, unread: 0, highlights: 0 });
     expect(buf.lastReadId).toBe(70);
+  });
+});
+
+// Split panes: activate() resets the buffer it switches away from (clears the
+// unread divider + counts) — but only when NO other pane still shows it. A
+// buffer visible in a second pane must keep that state, since the user is still
+// reading it there.
+describe('split-pane switch-away guard', () => {
+  it('preserves unread/divider when the buffer is still shown in another pane', () => {
+    const store = useBuffersStore();
+    store.replaceBacklog(1, '#a', [], undefined, undefined, undefined);
+    store.replaceBacklog(1, '#b', [], undefined, undefined, undefined);
+    const a = store.byKey('1::#a')!;
+    a.unread = 5;
+    a.dividerAfterId = 3;
+    h.activeKey = '1::#a';
+    // A second pane is also showing #a.
+    h.extraPaneKeys = ['1::#a'];
+
+    store.activate(1, '#b');
+
+    expect(a.unread).toBe(5);
+    expect(a.dividerAfterId).toBe(3);
+  });
+
+  it('resets unread/divider when no other pane shows the buffer', () => {
+    const store = useBuffersStore();
+    store.replaceBacklog(1, '#a', [], undefined, undefined, undefined);
+    store.replaceBacklog(1, '#b', [], undefined, undefined, undefined);
+    const a = store.byKey('1::#a')!;
+    a.unread = 5;
+    a.dividerAfterId = 3;
+    h.activeKey = '1::#a';
+    h.extraPaneKeys = [];
+
+    store.activate(1, '#b');
+
+    expect(a.unread).toBe(0);
+    expect(a.dividerAfterId).toBeNull();
   });
 });
 

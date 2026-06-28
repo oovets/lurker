@@ -277,10 +277,10 @@ import { socketSend } from '../composables/useSocket.js';
 import { useNickColors } from '../composables/useNickColors.js';
 import { useViewport } from '../composables/useViewport.js';
 import {
-  setStuckToBottom,
-  bumpNewBelow,
-  resetScrollState,
-  setUnreadAnchor,
+  setStuckToBottom as _setStuckToBottom,
+  bumpNewBelow as _bumpNewBelow,
+  resetScrollState as _resetScrollState,
+  setUnreadAnchor as _setUnreadAnchor,
   useScrollState,
 } from '../composables/useScrollState.js';
 import type { RenderSegment } from '../utils/nickColor.js';
@@ -307,7 +307,7 @@ import type {
 import { useMemberActions } from '../composables/useMemberActions.js';
 import type { MemberContext, MemberLike } from '../composables/useMemberActions.js';
 import { addressNick } from '../composables/useComposerOverlay.js';
-import { setViewedBuffer } from '../composables/useViewedBuffer.js';
+import { setViewedBuffer, clearViewedBuffer } from '../composables/useViewedBuffer.js';
 
 // Extended BufferMessage fields accessed in the template and script
 // (beyond the core BufferMessage definition which uses [key: string]: unknown).
@@ -377,9 +377,46 @@ interface IgnoreTarget {
 const props = withDefaults(
   defineProps<{
     pendingScrollId?: number | string | null;
+    // The buffer key this list renders. Split panes pass their pane's key so
+    // each pane shows its own buffer; omitted, it falls back to the focused
+    // pane's activeKey (the single-buffer path), keeping every other mount
+    // unchanged.
+    bufferKey?: string | null;
+    // Whether this pane is the focused one. The StatusBar's scroll mirror
+    // ("N new ↓", return-to-present, jump-to-unread) is a single shared
+    // singleton, so only the focused pane writes to it and reacts to its
+    // buttons — otherwise two panes would clobber each other. Defaults true so
+    // single-pane and mobile mounts (no prop) behave exactly as before.
+    isFocused?: boolean;
   }>(),
-  { pendingScrollId: null },
+  { pendingScrollId: null, bufferKey: null, isFocused: true },
 );
+
+// The key this instance is bound to: an explicit pane key, else the focused
+// pane. All the buffer lookups + scroll/divider watchers key off this so a
+// split pane never tracks the focused pane's buffer.
+const viewKey = computed(() => props.bufferKey ?? networks.activeKey);
+
+// Focused-pane gates on the shared StatusBar scroll mirror. A non-focused pane
+// scrolls fine via its own local stickToBottom; it just doesn't drive or read
+// the single shared indicator. Wrapping the imported setters keeps every call
+// site below unchanged.
+function setStuckToBottom(v: boolean): void {
+  if (props.isFocused) _setStuckToBottom(v);
+}
+function bumpNewBelow(): void {
+  if (props.isFocused) _bumpNewBelow();
+}
+function resetScrollState(): void {
+  if (props.isFocused) _resetScrollState();
+}
+function setUnreadAnchor(dir: 'up' | 'down' | null): void {
+  if (props.isFocused) _setUnreadAnchor(dir);
+}
+
+// One viewed-buffer slot per MessageList instance, keyed by a stable token for
+// the component's lifetime (see useViewedBuffer).
+const viewedToken = Symbol('viewed-buffer');
 
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
@@ -498,7 +535,7 @@ function setUnreadDividerEl(el: Element | ComponentPublicInstance | null): void 
   else if (!next) setUnreadAnchor(null);
 }
 
-const buffer = computed(() => (networks.activeKey ? buffers.byKey(networks.activeKey) : null));
+const buffer = computed(() => (viewKey.value ? buffers.byKey(viewKey.value) : null));
 const messages = computed(() => buffer.value?.messages || []);
 
 const selfLower = computed(() => {
@@ -1427,7 +1464,7 @@ watch(
 // nextTick after setup resolves after the initial render, so scroller.value
 // is populated by the time scrollToBottom runs.
 watch(
-  () => networks.activeKey,
+  () => viewKey.value,
   async () => {
     stickToBottom.value = true;
     unreadSeen = false;
@@ -1455,11 +1492,23 @@ watch(compactMode, async () => {
 // Watching the token (rather than wiring a callback) keeps the composable
 // stateless and avoids leaking refs to MessageList's DOM out of the component.
 watch(scrollToBottomToken, async () => {
+  // Only the focused pane owns the shared status-bar buttons.
+  if (!props.isFocused) return;
   await nextTick();
   stickToBottom.value = true;
   setStuckToBottom(true);
   scrollToBottom();
 });
+
+// When this pane becomes the focused one, push its local scroll state into the
+// shared mirror so the StatusBar immediately reflects the pane the user is now
+// driving, rather than whatever the previously-focused pane left behind.
+watch(
+  () => props.isFocused,
+  (focused) => {
+    if (focused) _setStuckToBottom(stickToBottom.value);
+  },
+);
 
 // Center the (single) unread divider element, marking not-stuck first so a
 // live message can't yank us back to the tail mid-read. The observer flips
@@ -1482,6 +1531,7 @@ function scrollDividerIntoView() {
 // case fetch a slice centered on the boundary first — the same loadAround path
 // jump-to-message uses — then center the real divider once it lands.
 watch(scrollToUnreadToken, async () => {
+  if (!props.isFocused) return;
   await nextTick();
   if (!scroller.value) return;
   const buf = buffer.value;
@@ -1495,7 +1545,7 @@ watch(scrollToUnreadToken, async () => {
   if (dividerPinnedToTop && buf.networkId != null && buf.hasMoreOlder && !buf.loadingHistory) {
     stickToBottom.value = false;
     setStuckToBottom(false);
-    const wantKey = networks.activeKey;
+    const wantKey = viewKey.value;
     buffers.loadAround(buf.networkId, buf.target, dividerAfterId);
     // loadAround rolls loadingHistory back to false synchronously if the send
     // failed (offline) — nothing will land to drive the scroll, and there's no
@@ -1516,7 +1566,7 @@ watch(scrollToUnreadToken, async () => {
         stop();
         // Bail if the user switched buffers while the slice was in flight —
         // the scroller now belongs to a different buffer.
-        if (networks.activeKey !== wantKey) return;
+        if (viewKey.value !== wantKey) return;
         await nextTick();
         scrollDividerIntoView();
       },
@@ -1551,8 +1601,8 @@ function onScrollerResize() {
 // the signal: follow activeKey while mounted, clear on unmount (Settings
 // route, mobile list/members screen, system console).
 watch(
-  () => networks.activeKey,
-  (key) => setViewedBuffer(key),
+  () => viewKey.value,
+  (key) => setViewedBuffer(viewedToken, key),
   { immediate: true },
 );
 
@@ -1585,7 +1635,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  setViewedBuffer(null);
+  clearViewedBuffer(viewedToken);
   if (scrollerObserver) {
     scrollerObserver.disconnect();
     scrollerObserver = null;

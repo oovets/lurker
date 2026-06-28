@@ -916,7 +916,7 @@ export const useBuffersStore = defineStore('buffers', {
     // phantom divider on the next session. The previous buffer's pointer
     // is already current because pushMessage keeps it synced live while
     // focused (see pushMessage), so leaving it just drops local state.
-    activate(networkId: number | string | null, target: string) {
+    activate(networkId: number | string | null, target: string, opts?: { paneId?: string }) {
       const networks = useNetworksStore();
       // Resolve to the canonical open buffer first (case-insensitive): a DM
       // activated from a member-list nick, /query, the profile modal, or a
@@ -931,8 +931,18 @@ export const useBuffersStore = defineStore('buffers', {
       // key() yields the bare sentinel for the app-scoped system buffer
       // (networkId null) and the usual `${networkId}::${target}` otherwise.
       const newKey = key(networkId, canonTarget);
-      const prevKey = networks.activeKey;
-      if (prevKey && prevKey !== newKey) {
+      // Which split pane are we loading into? Default the focused pane (the
+      // normal single-buffer path); "Open in Split" passes a fresh pane id.
+      // prevKey is THIS pane's outgoing buffer — read it before we reassign.
+      const paneId = opts?.paneId ?? networks.focusedPaneId;
+      const prevKey = networks.panes.find((p) => p.id === paneId)?.key ?? null;
+      networks.setFocusedPane(paneId);
+      networks.setActive(networkId, canonTarget);
+      // Reset the buffer we just switched away from — but ONLY if no other pane
+      // still shows it. With split panes a buffer can stay visible in a second
+      // pane, and there it must keep its unread divider, counts, and detached
+      // slice; zeroing them here would wipe state the user is still reading.
+      if (prevKey && prevKey !== newKey && !networks.paneKeys.includes(prevKey)) {
         const prev = this.buffers[prevKey];
         if (prev) {
           prev.dividerAfterId = null;
@@ -949,7 +959,6 @@ export const useBuffersStore = defineStore('buffers', {
             this.clearDetached(prev.networkId, prev.target, { wipeMessages: true });
         }
       }
-      networks.setActive(networkId, canonTarget);
       const buf = ensureBuffer(this, networkId, canonTarget);
       // Snapshot the divider from the CURRENT lastReadId before we advance
       // it below. The divider stays pinned to this snapshot for the

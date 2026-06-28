@@ -491,7 +491,9 @@ function handleMessage(raw: string): void {
     const inputHistory = useInputHistoryStore();
     const drafts = useDraftStore();
     const closedKey = `${payload.networkId}::${payload.target}`;
-    if (networks.activeKey === closedKey) networks.activeKey = null;
+    // Blank the closed buffer out of every pane showing it (not just the
+    // focused one), so a split view doesn't keep rendering a dropped buffer.
+    networks.clearKey(closedKey);
     buffers.drop(payload.networkId, payload.target);
     // History rows survive on the server (re-seeded if the buffer reopens);
     // we just drop the in-memory mirror so it doesn't go stale.

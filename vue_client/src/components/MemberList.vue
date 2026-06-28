@@ -52,6 +52,16 @@ import {
 } from '../utils/memberPrefix.js';
 import IgnoreModal from './IgnoreModal.vue';
 
+const props = withDefaults(
+  defineProps<{
+    // The buffer key whose members this list shows. Split panes pass their
+    // pane's key; omitted, it falls back to the focused pane (single-buffer
+    // path), unchanged for any other mount.
+    bufferKey?: string | null;
+  }>(),
+  { bufferKey: null },
+);
+
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
 const nicks = useNickColors();
@@ -60,7 +70,8 @@ const ignores = useIgnoresStore();
 const modalMember = ref<BufferMember | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 
-const buffer = computed(() => (networks.activeKey ? buffers.byKey(networks.activeKey) : null));
+const viewKey = computed(() => props.bufferKey ?? networks.activeKey);
+const buffer = computed(() => (viewKey.value ? buffers.byKey(viewKey.value) : null));
 const members = computed((): BufferMember[] => buffer.value?.members || []);
 const selfNick = computed(() => {
   const b = buffer.value;
@@ -77,7 +88,7 @@ const selfModes = computed<string[]>(() => {
 });
 
 watch(
-  () => networks.activeKey,
+  () => viewKey.value,
   () => {
     if (listEl.value) listEl.value.scrollTop = 0;
   },

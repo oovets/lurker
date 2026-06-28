@@ -57,13 +57,52 @@ export interface ActiveBuffer {
   network: Network | undefined;
 }
 
+// A split-view pane: one slot in the desktop grid showing a single buffer.
+// `key` is the same `${networkId}::${target}` (or flat virtual sentinel) the
+// buffers store uses, or null for an empty pane. The desktop shell renders one
+// column per pane; mobile only ever uses the single seed pane. Pane ids come
+// from a monotonic counter (no Date.now/random — keeps tests deterministic and
+// avoids the resume-breaking globals).
+export interface Pane {
+  id: string;
+  key: string | null;
+}
+
+let paneCounter = 0;
+function nextPaneId(): string {
+  paneCounter += 1;
+  return `pane-${paneCounter}`;
+}
+
 export const useNetworksStore = defineStore('networks', {
   state: () => ({
     networks: [] as Network[],
     states: {} as Record<number | string, NetworkState>,
-    activeKey: null as string | null,
+    // Split panes. Always at least one. `activeKey` is no longer stored
+    // directly — it's a getter onto the focused pane's key, so every existing
+    // reader (which means "the focused buffer") keeps working unchanged.
+    panes: [{ id: 'pane-0', key: null }] as Pane[],
+    focusedPaneId: 'pane-0',
   }),
   getters: {
+    // The pane the single shared input + status bar act on. Falls back to the
+    // first pane if focusedPaneId ever dangles (closePane refocuses, but guard
+    // anyway so readers never see undefined).
+    focusedPane(state): Pane {
+      return state.panes.find((p) => p.id === state.focusedPaneId) ?? state.panes[0];
+    },
+    // Back-compat: "the active/focused buffer key". Reads across the codebase
+    // (MessageInput, StatusBar, BufferList highlight, QuickSwitcher, keyboard
+    // nav) all legitimately mean the focused pane, so they need no change.
+    activeKey(): string | null {
+      return this.focusedPane?.key ?? null;
+    },
+    // Every key currently visible across all panes. Used by buffers.activate to
+    // decide whether leaving a buffer in one pane should reset its read state —
+    // it must NOT if another pane still shows it.
+    paneKeys(state): string[] {
+      return state.panes.map((p) => p.key).filter((k): k is string => k != null);
+    },
     networkById: (state) => (id: number) => state.networks.find((n) => n.id === id) || null,
     // Presence row for a (network, nick), disconnected-aware: a down network's
     // cached rows are stale, so report a synthetic 'offline'. Connected with no
@@ -78,14 +117,15 @@ export const useNetworksStore = defineStore('networks', {
         return netState?.peerPresence?.[nick.toLowerCase()] ?? null;
       },
     activeBuffer(state): ActiveBuffer | null {
-      if (!state.activeKey) return null;
+      const activeKey = this.activeKey;
+      if (!activeKey) return null;
       // Virtual buffers (:system:, :friends:) use a flat sentinel key (no `::`).
       // They have no IRC send target, so report "no IRC buffer active" — the
       // views drive their own header/rendering. Friends still renders messages
       // via buffers.byKey(activeKey) directly, not through this getter.
-      if (isVirtualKey(state.activeKey)) return null;
-      if (!state.activeKey.includes('::')) return null;
-      const [networkId, name] = state.activeKey.split('::');
+      if (isVirtualKey(activeKey)) return null;
+      if (!activeKey.includes('::')) return null;
+      const [networkId, name] = activeKey.split('::');
       const id = Number(networkId);
       return { networkId: id, target: name, network: state.networks.find((n) => n.id === id) };
     },
@@ -127,7 +167,11 @@ export const useNetworksStore = defineStore('networks', {
       await api(`/api/networks/${id}`, { method: 'DELETE' });
       this.networks = this.networks.filter((n) => n.id !== id);
       delete this.states[id];
-      if (this.activeKey?.startsWith(`${id}::`)) this.activeKey = null;
+      // Blank any pane showing a buffer on the removed network — across all
+      // panes, not just the focused one (#split-panes).
+      for (const pane of this.panes) {
+        if (pane.key?.startsWith(`${id}::`)) pane.key = null;
+      }
     },
     // The IRC connection toggles are the writes most reachable from the
     // read-only browse view (header toggle, network context menu), so they get
@@ -152,13 +196,52 @@ export const useNetworksStore = defineStore('networks', {
     setActive(networkId: number | string | null, target: string) {
       // The app-scoped system buffer (#355) has no network — it keys on the bare
       // sentinel target, matching the buffers store's key() helper.
-      this.activeKey = networkId == null ? target : `${networkId}::${target}`;
+      this.setFocusedKey(networkId == null ? target : `${networkId}::${target}`);
     },
     // Virtual buffers (system console, friends) aren't tied to an IRC network.
     // They use a flat sentinel key (no `::`) so the existing
     // `${networkId}::${target}` parsers ignore them.
     activateVirtual(key: string) {
-      this.activeKey = key;
+      this.setFocusedKey(key);
+    },
+    // ── Split panes ─────────────────────────────────────────────────────────
+    // Point the focused pane at a buffer key. The single write path behind
+    // setActive/activateVirtual, so "activate a buffer" always lands in the
+    // pane the user is currently driving.
+    setFocusedKey(key: string | null) {
+      const pane = this.panes.find((p) => p.id === this.focusedPaneId) ?? this.panes[0];
+      if (pane) pane.key = key;
+    },
+    setFocusedPane(id: string) {
+      if (this.panes.some((p) => p.id === id)) this.focusedPaneId = id;
+    },
+    // Open a new pane (initially showing `key`, often null) and focus it.
+    // Returns the new pane id so the caller can immediately activate a buffer
+    // into it via buffers.activate(networkId, target, { paneId }).
+    openPane(key: string | null = null): string {
+      const id = nextPaneId();
+      this.panes.push({ id, key });
+      this.focusedPaneId = id;
+      return id;
+    },
+    // Close a pane, never dropping below one. If the closed pane was focused,
+    // focus a neighbor so the input/status bar always has a target.
+    closePane(id: string) {
+      if (this.panes.length <= 1) return;
+      const idx = this.panes.findIndex((p) => p.id === id);
+      if (idx < 0) return;
+      this.panes.splice(idx, 1);
+      if (this.focusedPaneId === id) {
+        const neighbor = this.panes[idx] ?? this.panes[this.panes.length - 1];
+        this.focusedPaneId = neighbor.id;
+      }
+    },
+    // Null out every pane currently showing `key` (a buffer closed elsewhere,
+    // e.g. the close-buffer fan-out in useSocket).
+    clearKey(key: string) {
+      for (const pane of this.panes) {
+        if (pane.key === key) pane.key = null;
+      }
     },
     applySnapshot(networks: NetworkState[]) {
       const map: Record<number | string, NetworkState> = {};
