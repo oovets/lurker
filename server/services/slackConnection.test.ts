@@ -163,6 +163,39 @@ describe('SlackConnection', () => {
     });
   });
 
+  it('resolves Slack markup into Lurker-friendly text', async () => {
+    const user = createUser('fmt');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    events.length = 0;
+    const onMessage = h.handlers['message'];
+    await onMessage({
+      event: {
+        channel: 'C1',
+        ts: '1700000000.001000',
+        user: 'U1',
+        text: 'hi <@U1> see <#C1|general> and <https://x.com|the site> &amp; <!here>',
+      },
+      ack: async () => {},
+    });
+    const live = events.find((e) => e.type === 'message');
+    expect(live?.text).toBe('hi @Alice see #general and the site (https://x.com) & @here');
+  });
+
   it('demo mode: builds a canned workspace + drips live messages, no real Slack', async () => {
     vi.useFakeTimers();
     const user = createUser('demoer');
@@ -186,13 +219,21 @@ describe('SlackConnection', () => {
     const snap = conn.snapshot() as unknown as { channels: SnapChannel[] };
     expect(snap.channels.map((c) => c.name).sort()).toEqual(['#general', '#random']);
 
-    // The canned history was mirrored for this network (5 backfilled lines).
+    // The canned history was mirrored for this network (6 backfilled lines).
     const count = (
       db.prepare('SELECT COUNT(*) AS n FROM messages WHERE network_id = ?').get(net!.id) as {
         n: number;
       }
     ).n;
-    expect(count).toBe(5);
+    expect(count).toBe(6);
+
+    // Markup in the canned lines is resolved to readable text.
+    const ping = db
+      .prepare(
+        "SELECT text FROM messages WHERE network_id = ? AND nick = 'Bob' AND text LIKE 'ping%'",
+      )
+      .get(net!.id) as { text: string } | undefined;
+    expect(ping?.text).toBe('ping @me — see the Lurker site (https://lurker.chat)');
 
     // The drip publishes a live message on the timer.
     events.length = 0;

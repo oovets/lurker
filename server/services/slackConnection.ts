@@ -201,11 +201,14 @@ export class SlackConnection implements Connection {
     this.mapTarget('Alice', 'D_ALICE');
 
     const now = Date.now();
+    // Raw Slack-style markup in a couple of lines so the GUI visibly shows the
+    // mention/channel/link resolution (run through the same formatText path).
     const history: Array<[string, string, string, number]> = [
       ['#general', 'Alice', 'welcome to the demo workspace 👋', now - 60_000],
       ['#general', 'Bob', "this is Lurker's GUI rendering Slack-shaped data", now - 50_000],
+      ['#general', 'Bob', 'ping <@U_ME> — see <https://lurker.chat|the Lurker site>', now - 45_000],
       ['#general', 'me', 'nice — and split panes work on these buffers too', now - 40_000],
-      ['#random', 'Alice', 'random thoughts land here', now - 30_000],
+      ['#random', 'Alice', 'random thoughts land in <#C_RND|random>', now - 30_000],
       ['Alice', 'Alice', 'hey, this is a direct message', now - 20_000],
     ];
     for (const [target, nick, text, ms] of history) {
@@ -215,7 +218,7 @@ export class SlackConnection implements Connection {
         time: new Date(ms).toISOString(),
         type: 'message',
         nick,
-        text,
+        text: this.formatText(text),
         kind: 'privmsg',
         self: nick === 'me',
         extra: { demo: true },
@@ -487,10 +490,52 @@ export class SlackConnection implements Connection {
       : await this.resolveUserName(msg.user);
     return {
       nick,
-      text: msg.text || '',
+      text: this.formatText(msg.text || ''),
       self: !!msg.user && msg.user === this.selfId,
       time: tsToIso(msg.ts),
     };
+  }
+
+  // Resolve Slack message markup into the plain conventions Lurker's client
+  // already understands (so its existing linkifier / nick coloring just works):
+  //   <@U123> / <@U123|label>      → @DisplayName
+  //   <#C123|name> / <#C123>       → #name
+  //   <!here> / <!subteam^S|name>  → @here / @name
+  //   <https://x|label>            → label (https://x)   [or the bare url]
+  //   &amp; &lt; &gt;              → & < >
+  // Emoji shortcodes (:smile:) and mrkdwn (*bold*) are left for the client.
+  // Mentions resolve from the local user-name cache (sync) — a cache miss shows
+  // the raw id rather than blocking on a users.info round trip per message.
+  protected formatText(text: string): string {
+    if (!text) return '';
+    const replaced = text.replace(/<([^<>]+)>/g, (_match, inner: string) => {
+      if (inner.startsWith('@')) {
+        const body = inner.slice(1);
+        const pipe = body.indexOf('|');
+        if (pipe >= 0) return `@${body.slice(pipe + 1)}`;
+        return `@${this.userNames.get(body) || body}`;
+      }
+      if (inner.startsWith('#')) {
+        const body = inner.slice(1);
+        const pipe = body.indexOf('|');
+        if (pipe >= 0) return `#${body.slice(pipe + 1)}`;
+        return this.idToTarget.get(body) || `#${body}`;
+      }
+      if (inner.startsWith('!')) {
+        const body = inner.slice(1);
+        const pipe = body.indexOf('|');
+        if (pipe >= 0) return `@${body.slice(pipe + 1)}`;
+        return `@${body.split('^')[0]}`;
+      }
+      const pipe = inner.indexOf('|');
+      if (pipe >= 0) {
+        const url = inner.slice(0, pipe);
+        const label = inner.slice(pipe + 1);
+        return label ? `${label} (${url})` : url;
+      }
+      return inner;
+    });
+    return replaced.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
   }
 
   protected onTyping(event: { channel?: string; user?: string } | undefined): void {
