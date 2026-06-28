@@ -162,4 +162,45 @@ describe('SlackConnection', () => {
       kind: 'privmsg',
     });
   });
+
+  it('demo mode: builds a canned workspace + drips live messages, no real Slack', async () => {
+    vi.useFakeTimers();
+    const user = createUser('demoer');
+    const net = createNetwork(user.id, {
+      name: 'Demo',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'demo',
+      slack_app_token: 'demo',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    const snap = conn.snapshot() as unknown as { channels: SnapChannel[] };
+    expect(snap.channels.map((c) => c.name).sort()).toEqual(['#general', '#random']);
+
+    // The canned history was mirrored for this network (5 backfilled lines).
+    const count = (
+      db.prepare('SELECT COUNT(*) AS n FROM messages WHERE network_id = ?').get(net!.id) as {
+        n: number;
+      }
+    ).n;
+    expect(count).toBe(5);
+
+    // The drip publishes a live message on the timer.
+    events.length = 0;
+    vi.advanceTimersByTime(8000);
+    const live = events.find((e) => e.type === 'message' && e.target === '#general');
+    expect(live).toBeDefined();
+
+    conn.dispose();
+    vi.useRealTimers();
+  });
 });

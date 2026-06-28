@@ -76,6 +76,9 @@ export class SlackConnection implements Connection {
 
   protected web: WebClient | null = null;
   protected socket: SocketModeClient | null = null;
+  // Demo mode (sentinel `demo` tokens): drips canned live messages so the GUI
+  // can be exercised without a real workspace. Cleared on disconnect.
+  protected demoTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor({ network, onEvent }: { network: Network; onEvent: (event: EnrichedEvent) => void }) {
     this.network = network;
@@ -103,6 +106,13 @@ export class SlackConnection implements Connection {
     const appToken = this.network.slack_app_token;
     if (!botToken || !appToken) {
       throw new Error('missing slack_bot_token or slack_app_token');
+    }
+    // Demo workspace — no real Slack, just canned data + a live drip so the
+    // whole GUI path (buffers, history, members, live, split panes) is testable
+    // without credentials.
+    if (botToken === 'demo') {
+      await this.connectDemo();
+      return;
     }
     this.web = new WebClient(botToken);
 
@@ -148,9 +158,96 @@ export class SlackConnection implements Connection {
 
   disconnect(reason?: string): void {
     void reason;
+    if (this.demoTimer) {
+      clearInterval(this.demoTimer);
+      this.demoTimer = null;
+    }
     void this.socket?.disconnect().catch(() => {});
     this.socket = null;
     this.setState('disconnected');
+  }
+
+  // Canned two-channel + one-DM workspace with a few backfilled messages and a
+  // live message every few seconds. Same publish/persist path as the real
+  // adapter, so it exercises the identical server→client contract.
+  protected async connectDemo(): Promise<void> {
+    this.selfId = 'U_ME';
+    this.selfDisplayName = 'me';
+    for (const [id, name] of [
+      ['U_ME', 'me'],
+      ['U_ALICE', 'Alice'],
+      ['U_BOB', 'Bob'],
+    ] as const) {
+      this.userNames.set(id, name);
+    }
+
+    const demoChannels: Array<{ id: string; name: string; topic: string; members: string[] }> = [
+      { id: 'C_GEN', name: '#general', topic: 'general chatter', members: ['Alice', 'Bob', 'me'] },
+      { id: 'C_RND', name: '#random', topic: 'anything goes', members: ['Alice', 'me'] },
+    ];
+    for (const c of demoChannels) {
+      this.mapTarget(c.name, c.id);
+      const members = new Map<string, ChannelMember>();
+      for (const n of c.members) {
+        members.set(n.toLowerCase(), { nick: n, modes: [], away: false, user: null, host: null });
+      }
+      this.channels.set(c.name.toLowerCase(), {
+        name: c.name,
+        topic: c.topic,
+        members,
+        modes: new Set<string>(),
+      });
+    }
+    this.mapTarget('Alice', 'D_ALICE');
+
+    const now = Date.now();
+    const history: Array<[string, string, string, number]> = [
+      ['#general', 'Alice', 'welcome to the demo workspace 👋', now - 60_000],
+      ['#general', 'Bob', "this is Lurker's GUI rendering Slack-shaped data", now - 50_000],
+      ['#general', 'me', 'nice — and split panes work on these buffers too', now - 40_000],
+      ['#random', 'Alice', 'random thoughts land here', now - 30_000],
+      ['Alice', 'Alice', 'hey, this is a direct message', now - 20_000],
+    ];
+    for (const [target, nick, text, ms] of history) {
+      insertMessage({
+        networkId: this.network.id,
+        target,
+        time: new Date(ms).toISOString(),
+        type: 'message',
+        nick,
+        text,
+        kind: 'privmsg',
+        self: nick === 'me',
+        extra: { demo: true },
+        matchedRuleId: null,
+        userhost: null,
+        fromIgnored: false,
+      });
+    }
+
+    this.setState('connected');
+
+    const drip: Array<[string, string]> = [
+      ['Alice', 'still here — sending a live update'],
+      ['Bob', 'look, a new message just appeared'],
+      ['Alice', 'try opening #random in a split pane'],
+    ];
+    let i = 0;
+    this.demoTimer = setInterval(() => {
+      if (this.disposed) return;
+      const [nick, text] = drip[i % drip.length];
+      i += 1;
+      this.publish({
+        type: 'message',
+        target: '#general',
+        nick,
+        text,
+        kind: 'privmsg',
+        self: false,
+        time: new Date().toISOString(),
+        extra: { demo: true },
+      });
+    }, 8000);
   }
 
   dispose(reason?: string): void {
