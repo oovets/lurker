@@ -40,6 +40,8 @@ const PERSISTED_SLACK_TYPES = new Set(['message', 'action']);
 // Slack's rate limits on a cold start; page-up history is a later iteration.
 const BACKFILL_LIMIT = 40;
 const MEMBERS_LIMIT = 100;
+// Parallel Slack calls during cold-start (members + per-conversation history).
+const CONCURRENCY = 6;
 
 interface SlackMessageShape {
   ts?: string;
@@ -49,6 +51,22 @@ interface SlackMessageShape {
   thread_ts?: string;
   bot_id?: string;
   username?: string;
+  reactions?: Array<{ name?: string; count?: number }>;
+}
+
+// Run an async fn over items with bounded concurrency — cuts cold-start time
+// (members + per-conversation history) from sum-of-calls to roughly
+// slowest-call × ceil(n/limit), while staying gentle on Slack's rate limits.
+async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next;
+      next += 1;
+      await fn(items[idx]).catch(() => {});
+    }
+  });
+  await Promise.all(workers);
 }
 
 export class SlackConnection implements Connection {
@@ -208,6 +226,8 @@ export class SlackConnection implements Connection {
       ['#general', 'Bob', "this is Lurker's GUI rendering Slack-shaped data", now - 50_000],
       ['#general', 'Bob', 'ping <@U_ME> — see <https://lurker.chat|the Lurker site>', now - 45_000],
       ['#general', 'me', 'nice — and split panes work on these buffers too', now - 40_000],
+      ['#general', 'Alice', 'shipping Slack support 🚀  ·  :tada: 3  :rocket: 2', now - 35_000],
+      ['#general', 'Bob', '↳ huge — thread replies show inline like this', now - 33_000],
       ['#random', 'Alice', 'random thoughts land in <#C_RND|random>', now - 30_000],
       ['Alice', 'Alice', 'hey, this is a direct message', now - 20_000],
     ];
@@ -350,9 +370,12 @@ export class SlackConnection implements Connection {
   }
 
   // Build channel + DM buffers from the user's conversations, populating the
-  // target↔id maps and (for channels) the nicklist.
+  // target↔id maps and (for channels) the nicklist. Member lists are fetched in
+  // parallel after the (fast) conversation list, rather than serially per
+  // channel — the dominant cold-start cost on a workspace with many channels.
   protected async loadConversations(): Promise<void> {
     if (!this.web) return;
+    const channelIds: string[] = [];
     let cursor: string | undefined;
     do {
       const res = await this.web.users.conversations({
@@ -371,17 +394,18 @@ export class SlackConnection implements Connection {
         } else {
           const name = `#${ch.name || ch.id}`;
           this.mapTarget(name, ch.id);
-          const members = await this.fetchMembers(ch.id);
           this.channels.set(name.toLowerCase(), {
             name,
             topic: (ch.topic?.value as string | undefined) || null,
-            members,
+            members: new Map<string, ChannelMember>(),
             modes: new Set<string>(),
           });
+          channelIds.push(ch.id);
         }
       }
       cursor = res.response_metadata?.next_cursor || undefined;
     } while (cursor);
+    await pool(channelIds, CONCURRENCY, (id) => this.fillMembers(id));
   }
 
   protected mapTarget(target: string, channelId: string): void {
@@ -389,9 +413,11 @@ export class SlackConnection implements Connection {
     this.idToTarget.set(channelId, target);
   }
 
-  protected async fetchMembers(channelId: string): Promise<Map<string, ChannelMember>> {
-    const map = new Map<string, ChannelMember>();
-    if (!this.web) return map;
+  protected async fillMembers(channelId: string): Promise<void> {
+    if (!this.web) return;
+    const target = this.idToTarget.get(channelId);
+    const channel = target ? this.channels.get(target.toLowerCase()) : null;
+    if (!channel) return;
     try {
       const res = await this.web.conversations.members({
         channel: channelId,
@@ -399,20 +425,25 @@ export class SlackConnection implements Connection {
       });
       for (const uid of res.members || []) {
         const nick = await this.resolveUserName(uid);
-        map.set(nick.toLowerCase(), { nick, modes: [], away: false, user: null, host: null });
+        channel.members.set(nick.toLowerCase(), {
+          nick,
+          modes: [],
+          away: false,
+          user: null,
+          host: null,
+        });
       }
     } catch {
       /* empty nicklist is acceptable for MVP */
     }
-    return map;
   }
 
   // Persist recent history for every mapped conversation, oldest-first so the
-  // Lurker message ids increase in chronological order.
+  // Lurker message ids increase in chronological order. Parallelised across
+  // conversations (bounded) to keep cold-start snappy.
   protected async backfillAll(): Promise<void> {
-    for (const [, channelId] of this.targetToId) {
-      await this.backfill(channelId).catch(() => {});
-    }
+    const ids = Array.from(this.targetToId.values());
+    await pool(ids, CONCURRENCY, (id) => this.backfill(id));
   }
 
   protected async backfill(channelId: string): Promise<void> {
@@ -488,9 +519,22 @@ export class SlackConnection implements Connection {
     const nick = msg.bot_id
       ? msg.username || (await this.resolveUserName(msg.user)) || 'bot'
       : await this.resolveUserName(msg.user);
+    let text = this.formatText(msg.text || '');
+    // Thread replies (a thread_ts that isn't this message's own ts) flow inline
+    // in the channel with a marker, so a flat IRC-style buffer still reads as a
+    // conversation. A dedicated thread pane is a later iteration.
+    if (msg.thread_ts && msg.thread_ts !== msg.ts) text = `↳ ${text}`;
+    // Reactions render as trailing emoji shortcodes (Lurker draws the glyphs).
+    // History carries the current tallies; live add/remove updates are a later
+    // iteration (they'd need an editable-message surface in the client).
+    const reactions = (msg.reactions || [])
+      .filter((r) => r.name)
+      .map((r) => `:${r.name}: ${r.count ?? 1}`);
+    if (reactions.length)
+      text = text ? `${text}  ·  ${reactions.join('  ')}` : reactions.join('  ');
     return {
       nick,
-      text: this.formatText(msg.text || ''),
+      text,
       self: !!msg.user && msg.user === this.selfId,
       time: tsToIso(msg.ts),
     };

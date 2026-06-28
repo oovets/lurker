@@ -196,6 +196,45 @@ describe('SlackConnection', () => {
     expect(live?.text).toBe('hi @Alice see #general and the site (https://x.com) & @here');
   });
 
+  it('renders reactions as emoji shortcodes and marks thread replies', async () => {
+    const user = createUser('rx');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    events.length = 0;
+    const onMessage = h.handlers['message'];
+    // A threaded reply carrying reactions.
+    await onMessage({
+      event: {
+        channel: 'C1',
+        ts: '1700000000.002000',
+        thread_ts: '1700000000.001500',
+        user: 'U1',
+        text: 'in the thread',
+        reactions: [
+          { name: 'tada', count: 3 },
+          { name: '+1', count: 2 },
+        ],
+      },
+      ack: async () => {},
+    });
+    const live = events.find((e) => e.type === 'message');
+    expect(live?.text).toBe('↳ in the thread  ·  :tada: 3  :+1: 2');
+  });
+
   it('demo mode: builds a canned workspace + drips live messages, no real Slack', async () => {
     vi.useFakeTimers();
     const user = createUser('demoer');
@@ -219,13 +258,13 @@ describe('SlackConnection', () => {
     const snap = conn.snapshot() as unknown as { channels: SnapChannel[] };
     expect(snap.channels.map((c) => c.name).sort()).toEqual(['#general', '#random']);
 
-    // The canned history was mirrored for this network (6 backfilled lines).
+    // The canned history was mirrored for this network (8 backfilled lines).
     const count = (
       db.prepare('SELECT COUNT(*) AS n FROM messages WHERE network_id = ?').get(net!.id) as {
         n: number;
       }
     ).n;
-    expect(count).toBe(6);
+    expect(count).toBe(8);
 
     // Markup in the canned lines is resolved to readable text.
     const ping = db
