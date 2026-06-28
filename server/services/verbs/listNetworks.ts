@@ -28,7 +28,7 @@ registerVerb({
         id: net.id,
         name: net.name,
         connected: conn?.state === 'connected',
-        nick: conn?.client?.user?.nick || net.nick,
+        nick: conn?.selfName() || net.nick,
       };
     });
   },

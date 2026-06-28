@@ -35,6 +35,9 @@ export const ENCRYPTED_NETWORK_COLUMNS = [
   'sasl_account',
   'sasl_password',
   'connect_commands',
+  // Slack credentials — same at-rest encryption as the IRC secrets above.
+  'slack_bot_token',
+  'slack_app_token',
 ] as const;
 
 // FTS5 maintains its own shadow tables (messages_fts_data, _idx, _content,
@@ -107,6 +110,9 @@ export const EXPORT_TABLES = Object.freeze({
       'sasl_password',
       'connect_commands',
       'position',
+      'provider',
+      'slack_bot_token',
+      'slack_app_token',
     ],
   },
 

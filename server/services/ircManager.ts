@@ -3,7 +3,13 @@
 
 import { EventEmitter } from 'events';
 import { IrcConnection } from './ircConnection.js';
+import { SlackConnection } from './slackConnection.js';
 import * as systemLog from './systemLog.js';
+
+// A managed connection is either protocol. Typed as the concrete union (not the
+// Connection interface) so `conn.provider === 'irc'` narrows to IrcConnection
+// for the IRC-only paths (RPE2E, multiline). Slack rows go to SlackConnection.
+type ManagedConnection = IrcConnection | SlackConnection;
 import connectScheduler from './connectScheduler.js';
 import {
   listNetworksForUser,
@@ -72,14 +78,14 @@ function awayStateFromRow(row: AwayStateRow | null) {
 }
 
 class IrcManager extends EventEmitter {
-  byUser: Map<number, Map<number, IrcConnection>>;
+  byUser: Map<number, Map<number, ManagedConnection>>;
 
   constructor() {
     super();
     this.byUser = new Map();
   }
 
-  connectionsForUser(userId: number): Map<number, IrcConnection> {
+  connectionsForUser(userId: number): Map<number, ManagedConnection> {
     let m = this.byUser.get(userId);
     if (!m) {
       m = new Map();
@@ -88,11 +94,11 @@ class IrcManager extends EventEmitter {
     return m;
   }
 
-  getConnection(userId: number, networkId: number): IrcConnection | null {
+  getConnection(userId: number, networkId: number): ManagedConnection | null {
     return this.byUser.get(userId)?.get(networkId) || null;
   }
 
-  listConnections(userId: number): IrcConnection[] {
+  listConnections(userId: number): ManagedConnection[] {
     return Array.from(this.connectionsForUser(userId).values());
   }
 
@@ -119,7 +125,7 @@ class IrcManager extends EventEmitter {
     userId: number,
     networkId: number,
     opts: { deferrable?: boolean } = {},
-  ): IrcConnection | null {
+  ): ManagedConnection | null {
     // Paused accounts never hold a live IRC connection. This single gate is the
     // linchpin of the pause feature: it covers boot-time autoconnect
     // (initForUser → initAll), the explicit connect/reconnect routes, and
@@ -129,10 +135,36 @@ class IrcManager extends EventEmitter {
     if (findUserById(userId)?.is_paused) return null;
     const network = getNetwork(networkId, userId);
     if (!network) return null;
-    let conn = this.getConnection(userId, networkId);
-    if (conn) return conn;
+    const existing = this.getConnection(userId, networkId);
+    if (existing) return existing;
 
-    conn = new IrcConnection({
+    // Slack networks take the Slack adapter path: no IRC handshake, no
+    // away-state seeding, no 'registered' auto-join (SlackConnection.connect
+    // fetches conversations itself). Everything downstream (manager methods,
+    // wsHub fan-out, the client) is provider-agnostic.
+    if (network.provider === 'slack') {
+      const slackConn = new SlackConnection({
+        network,
+        onEvent: (event) => this.emit('event', event),
+      });
+      this.connectionsForUser(userId).set(networkId, slackConn);
+      const launchSlack = (): void => {
+        if (this.getConnection(userId, networkId) !== slackConn || slackConn.disposed) return;
+        systemLog.log({
+          userId,
+          scope: `net:${network.name}`,
+          fields: { networkId },
+          text: `Connecting to Slack workspace ${network.name}`,
+        });
+        slackConn.connect();
+      };
+      if (opts.deferrable)
+        connectScheduler.schedule(network.host || `slack:${networkId}`, launchSlack);
+      else launchSlack();
+      return slackConn;
+    }
+
+    const conn = new IrcConnection({
       network,
       onEvent: (event) => this.emit('event', event),
     });
@@ -238,7 +270,7 @@ class IrcManager extends EventEmitter {
     userId: number,
     networkId: number,
     reason: string = 'reconnecting',
-  ): IrcConnection | null {
+  ): ManagedConnection | null {
     this.disposeNetwork(userId, networkId, reason);
     return this.startNetwork(userId, networkId);
   }
@@ -286,7 +318,9 @@ class IrcManager extends EventEmitter {
     // flag). encryptOutgoing handles its own chunking, so this path bypasses the
     // multiline/splitSay plumbing entirely. 'disabled' falls through to plaintext;
     // 'error' must NOT fall through (that would leak cleartext on an E2E channel).
-    if (isChannelContext(target)) {
+    // IRC-only: gate on provider so a Slack `#channel` target never enters the
+    // RPE2E path (and so `conn` narrows to IrcConnection for the e2e helpers).
+    if (conn.provider === 'irc' && isChannelContext(target)) {
       const outcome = e2eManager.encryptOutgoing(userId, networkId, contextKey(target, ''), text);
       e2eDbg(
         () =>
@@ -337,7 +371,7 @@ class IrcManager extends EventEmitter {
     // trims edge blanks, and the client's multilineMessageCount gates the same
     // way, so the two stay in sync. (#381)
     if (hasInteriorNewline(text) && conn.supportsMultiline()) {
-      const nick = conn.client.user?.nick;
+      const nick = conn.selfName();
       for (const echo of conn.sendMultiline(target, text)) {
         conn.publish({ type: 'message', target, nick, text: echo, kind: 'privmsg', self: true });
       }
@@ -349,7 +383,7 @@ class IrcManager extends EventEmitter {
       conn.publish({
         type: 'message',
         target,
-        nick: conn.client.user?.nick,
+        nick: conn.selfName(),
         text: chunk,
         kind: 'privmsg',
         self: true,
@@ -364,12 +398,14 @@ class IrcManager extends EventEmitter {
   // silently leak cleartext on a channel the user believes is encrypted, refuse
   // the send and say so inline. Encrypted actions are a future protocol feature.
   private refuseCleartextOnE2eChannel(
-    conn: IrcConnection,
+    conn: ManagedConnection,
     userId: number,
     networkId: number,
     target: string,
     kind: 'action' | 'notice',
   ): boolean {
+    // RPE2E is IRC-only; Slack channels never carry an encryption policy.
+    if (conn.provider !== 'irc') return false;
     if (!isChannelContext(target)) return false;
     if (!e2eManager.isChannelEnabled(userId, networkId, contextKey(target, ''))) return false;
     conn.publishEphemeral({
@@ -391,7 +427,7 @@ class IrcManager extends EventEmitter {
       conn.publish({
         type: 'action',
         target,
-        nick: conn.client.user?.nick,
+        nick: conn.selfName(),
         text: chunk,
         self: true,
       });
@@ -413,7 +449,7 @@ class IrcManager extends EventEmitter {
       conn.publish({
         type: 'notice',
         target,
-        nick: conn.client.user?.nick,
+        nick: conn.selfName(),
         text: chunk,
         kind: 'notice',
         self: true,
@@ -437,7 +473,8 @@ class IrcManager extends EventEmitter {
   // network isn't connected, so the WS layer can tell the user.
   e2eCommand(userId: number, networkId: number, target: string, argLine: string): boolean {
     const conn = this.getConnection(userId, networkId);
-    if (!conn) return false;
+    // RPE2E is IRC-only — a Slack connection has no runE2eCommand.
+    if (!conn || conn.provider !== 'irc') return false;
     conn.runE2eCommand(target, argLine);
     return true;
   }

@@ -36,6 +36,8 @@
     "@noble/hashes": "^2.2.0",
     "@scure/bip39": "^2.2.0",
     "@simplewebauthn/server": "^13.3.1",
+    "@slack/socket-mode": "^2.0.7",
+    "@slack/web-api": "^7.17.0",
     "archiver": "^8.0.0",
     "better-sqlite3": "^12.10.1",
     "cookie-parser": "^1.4.7",

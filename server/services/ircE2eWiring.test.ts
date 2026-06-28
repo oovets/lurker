@@ -54,6 +54,9 @@ function makeConn(): IrcConnection {
       sasl_password: null,
       connect_commands: null,
       position: 0,
+      provider: 'irc',
+      slack_bot_token: null,
+      slack_app_token: null,
       created_at: new Date().toISOString(),
     },
     onEvent: () => {},
@@ -68,6 +71,8 @@ describe('outbound encrypt (ircManager.send)', () => {
       say,
       publish,
       client: { user: { nick: 'alice' } },
+      provider: 'irc',
+      selfName: () => 'alice',
       supportsMultiline: () => false,
       flushE2eRekeys: () => {},
     } as unknown as IrcConnection;
@@ -105,6 +110,8 @@ describe('outbound encrypt (ircManager.send)', () => {
       say,
       publish,
       client: { user: { nick: 'alice' } },
+      provider: 'irc',
+      selfName: () => 'alice',
       supportsMultiline: () => false,
       flushE2eRekeys: () => {},
     } as unknown as IrcConnection;
@@ -307,6 +314,8 @@ describe('egress refuses cleartext actions/notices on an E2E channel (#2)', () =
       publish,
       publishEphemeral,
       client: { user: { nick: 'alice' } },
+      provider: 'irc',
+      selfName: () => 'alice',
     } as unknown as IrcConnection;
     return { conn, action, notice, publishEphemeral };
   }

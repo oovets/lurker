@@ -744,6 +744,14 @@ ensureColumn('networks', 'connect_commands', 'TEXT');
 // create/reorder; ties fall back to id ASC so freshly migrated rows stay in
 // their original creation order. See schemaVersion < 6 backfill below.
 ensureColumn('networks', 'position', 'INTEGER NOT NULL DEFAULT 0');
+// Chat protocol for this network. 'irc' (default) keeps every existing row on
+// the IRC connection path; 'slack' routes to the Slack adapter. The two token
+// columns hold Slack credentials (encrypted at rest like the SASL columns):
+// slack_bot_token is the xoxb-/xoxp- Web API token, slack_app_token the xapp-
+// app-level token used to open the socket-mode stream. Unused for IRC rows.
+ensureColumn('networks', 'provider', `TEXT NOT NULL DEFAULT 'irc'`);
+ensureColumn('networks', 'slack_bot_token', 'TEXT');
+ensureColumn('networks', 'slack_app_token', 'TEXT');
 ensureColumn('users', 'password_hash', 'TEXT');
 ensureColumn('users', 'last_seen_at', 'TEXT');
 // Account access state, orthogonal to role. A paused account keeps all its data

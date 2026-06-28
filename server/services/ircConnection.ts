@@ -3,6 +3,7 @@
 
 import IRC, { ircLineParser } from 'irc-framework';
 import type { Client as IrcClient } from 'irc-framework';
+import type { Connection } from './connection.js';
 import { insertMessage, hasMessageForTarget, listBufferTargets } from '../db/messages.js';
 import type { Network } from '../db/networks.js';
 import { upsertChannel } from '../db/networks.js';
@@ -79,7 +80,7 @@ const SEND_REJECTION_ATTRIBUTION_MS = 15000;
 // Internal shapes
 // ---------------------------------------------------------------------------
 
-interface ChannelMember {
+export interface ChannelMember {
   nick: string;
   modes: string[];
   away: boolean;
@@ -87,7 +88,7 @@ interface ChannelMember {
   host: string | null;
 }
 
-interface ChannelState {
+export interface ChannelState {
   name: string;
   topic: string | null;
   members: Map<string, ChannelMember>;
@@ -99,7 +100,7 @@ interface ModeEntry {
   param?: string;
 }
 
-interface AwayState {
+export interface AwayState {
   active: boolean;
   message: string | null;
   since: string | null;
@@ -110,14 +111,14 @@ interface AwayState {
 // Events emitted internally toward wsHub. The shape is open-ended because
 // different event types carry very different fields. We keep `type` and the
 // common fields typed; the rest is spread dynamically.
-interface IrcEvent {
+export interface IrcEvent {
   type: string;
   target?: string;
   [key: string]: unknown;
 }
 
 // Enriched event with server-stamped fields added by publish().
-interface EnrichedEvent extends IrcEvent {
+export interface EnrichedEvent extends IrcEvent {
   userId: number;
   networkId: number;
   time: string;
@@ -216,7 +217,8 @@ interface PeerWatch {
   contactId: number | null;
 }
 
-export class IrcConnection {
+export class IrcConnection implements Connection {
+  readonly provider = 'irc' as const;
   network: Network;
   onEvent: (event: EnrichedEvent) => void;
   client: IrcClient;
@@ -2266,6 +2268,12 @@ export class IrcConnection {
     });
   }
 
+  // The user's own nick on this network, for self-echo of sent messages.
+  // currentNick is the reliable server-tracked value; client.user.nick lags
+  // during the 'connected' dispatch (see currentNick's note above).
+  selfName(): string {
+    return this.client.user?.nick || this.currentNick || this.network.nick;
+  }
   join(channel: string): void {
     this.client.join(channel);
   }

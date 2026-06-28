@@ -39,6 +39,11 @@ export interface Network {
   connect_commands: string | null;
   position: number;
   created_at: string;
+  // Chat protocol: 'irc' (default) or 'slack'. Slack rows ignore the IRC fields
+  // (host/port/nick/sasl/…) and use the two token columns instead.
+  provider: string;
+  slack_bot_token: string | null;
+  slack_app_token: string | null;
 }
 
 /** A row from the `channels` table. */
@@ -65,6 +70,9 @@ export interface NetworkFields {
   sasl_account?: string | null;
   sasl_password?: string | null;
   connect_commands?: string | null;
+  provider?: string;
+  slack_bot_token?: string | null;
+  slack_app_token?: string | null;
 }
 
 export function listNetworksForUser(userId: number): Network[] {
@@ -104,6 +112,9 @@ export function createNetwork(userId: number, fields: NetworkFields): Network | 
     sasl_account,
     sasl_password,
     connect_commands,
+    provider,
+    slack_bot_token,
+    slack_app_token,
   } = fields;
   const { next } = db
     .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM networks WHERE user_id = ?')
@@ -111,8 +122,8 @@ export function createNetwork(userId: number, fields: NetworkFields): Network | 
   const result = db
     .prepare(
       `
-    INSERT INTO networks (user_id, name, host, port, tls, trusted_certificates, nick, username, realname, server_password, autoconnect, sasl_account, sasl_password, connect_commands, position)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO networks (user_id, name, host, port, tls, trusted_certificates, nick, username, realname, server_password, autoconnect, sasl_account, sasl_password, connect_commands, position, provider, slack_bot_token, slack_app_token)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
     )
     .run(
@@ -131,6 +142,9 @@ export function createNetwork(userId: number, fields: NetworkFields): Network | 
       encryptSecret(sasl_password || null),
       encryptSecret(connect_commands || null),
       next,
+      provider || 'irc',
+      encryptSecret(slack_bot_token || null),
+      encryptSecret(slack_app_token || null),
     );
   return getNetwork(result.lastInsertRowid, userId);
 }
