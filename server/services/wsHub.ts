@@ -1734,6 +1734,22 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         }
         break;
       }
+      case 'thread-open': {
+        // Slack thread: fetch the thread (parent + replies) into a thread buffer
+        // and ship its backlog so the client (which opened a pane for it) renders.
+        const conn = ircManager.getConnection(userId, msg.networkId as number);
+        const networkId = msg.networkId as number;
+        if (conn?.provider === 'slack') {
+          void conn
+            .openThread(msg.target as string, msg.threadTs as string)
+            .then((threadTarget) => {
+              if (threadTarget && ws.readyState === ws.OPEN) {
+                send(ws, buildBufferBacklog(userId, networkId, threadTarget));
+              }
+            });
+        }
+        break;
+      }
       case 'mark-read': {
         const target = msg.target as string;
         const requested = Number(msg.messageId);

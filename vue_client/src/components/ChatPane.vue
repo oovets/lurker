@@ -227,6 +227,8 @@ defineExpose({
 const isDmHeader = computed(() => {
   if (!active.value) return false;
   if (isChannel.value || isServerBuffer.value) return false;
+  // Thread buffers aren't DMs — no profile/note actions for them.
+  if (active.value.target.startsWith(':thread:')) return false;
   return true;
 });
 function openDmProfile() {

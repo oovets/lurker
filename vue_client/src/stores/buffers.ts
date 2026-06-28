@@ -120,6 +120,9 @@ export interface BufferMessage {
   // live reaction updates, and the current emoji reaction chips (`mine` marks
   // the user's own reaction).
   slackTs?: string;
+  // The thread root ts (when this message is part of a thread), so "open thread"
+  // roots at the parent rather than a reply.
+  threadRoot?: string;
   reactions?: Array<{ name: string; count: number; mine?: boolean }>;
   [key: string]: unknown;
 }

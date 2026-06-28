@@ -78,6 +78,12 @@ export function useActiveBuffer(keyArg?: MaybeRefOrGetter<string | null>): Activ
     const t = active.value?.target;
     if (!t) return '';
     if (isServerBuffer.value) return (active.value?.network as any)?.name || 'server';
+    // Slack thread buffer `:thread:#general:<ts>` → "#general › thread".
+    if (t.startsWith(':thread:')) {
+      const rest = t.slice(':thread:'.length);
+      const lastColon = rest.lastIndexOf(':');
+      return `${lastColon > 0 ? rest.slice(0, lastColon) : rest} › thread`;
+    }
     return t;
   });
 

@@ -16,7 +16,7 @@ process.env.DATABASE_PATH = path.join(tmpDir, 'test.db');
 // live message through them.
 const h = vi.hoisted(() => {
   const handlers: Record<string, (a: unknown) => unknown> = {};
-  const posts: Array<{ channel: string; text: string }> = [];
+  const posts: Array<{ channel: string; text: string; thread_ts?: string }> = [];
   const reacts: Array<{ channel: string; timestamp: string; name: string; op: string }> = [];
   const web = {
     auth: { test: async () => ({ user_id: 'U_SELF', user: 'me' }) },
@@ -46,10 +46,16 @@ const h = vi.hoisted(() => {
         channel === 'C1'
           ? { messages: [{ ts: '1700000000.000100', user: 'U1', text: 'hello world' }] }
           : { messages: [] },
+      replies: async ({ ts }: { channel: string; ts: string }) => ({
+        messages: [
+          { ts, user: 'U1', text: 'thread parent' },
+          { ts: `${ts}-r`, user: 'U_SELF', text: 'a reply', thread_ts: ts },
+        ],
+      }),
     },
     chat: {
-      postMessage: async (args: { channel: string; text: string }) => {
-        posts.push(args);
+      postMessage: async (args: { channel: string; text: string; thread_ts?: string }) => {
+        posts.push({ channel: args.channel, text: args.text, thread_ts: args.thread_ts });
         return { ok: true, ts: '1700000000.000300' };
       },
     },
@@ -310,6 +316,58 @@ describe('SlackConnection', () => {
       { name: 'tada', count: 4, mine: false },
       { name: '+1', count: 2, mine: false },
     ]);
+  });
+
+  it('opens a thread buffer, posts replies with thread_ts, mirrors live replies', async () => {
+    const user = createUser('threader');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    const root = '1700000000.007000';
+    const threadTarget = await (
+      conn as unknown as { openThread(t: string, ts: string): Promise<string | null> }
+    ).openThread('#general', root);
+    expect(threadTarget).toBe(`:thread:#general:${root}`);
+
+    // Parent + reply persisted under the thread buffer.
+    const rows = db
+      .prepare('SELECT text FROM messages WHERE target = ? ORDER BY id')
+      .all(threadTarget) as Array<{ text: string }>;
+    expect(rows.map((r) => r.text)).toEqual(['thread parent', 'a reply']);
+
+    // A reply sent in the thread buffer posts with thread_ts.
+    h.posts.length = 0;
+    conn.say(threadTarget!, 'my reply');
+    await Promise.resolve();
+    expect(h.posts).toContainEqual({ channel: 'C1', text: 'my reply', thread_ts: root });
+
+    // A live channel reply to that thread mirrors into the thread buffer.
+    events.length = 0;
+    await h.handlers['message']({
+      event: {
+        channel: 'C1',
+        ts: '1700000000.007050',
+        user: 'U1',
+        text: 'live reply',
+        thread_ts: root,
+      },
+      ack: async () => {},
+    });
+    const mirrored = events.filter((e) => e.type === 'message' && e.target === threadTarget);
+    expect(mirrored.map((e) => e.text)).toEqual(['live reply']);
   });
 
   it('click-to-react calls reactions.add/remove', async () => {

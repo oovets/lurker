@@ -277,6 +277,17 @@
           >
             <i :class="a.icon"></i>
           </button>
+          <button
+            v-if="canOpenThread(row.m)"
+            type="button"
+            class="row-action"
+            title="Open thread"
+            aria-label="Open thread"
+            @click.stop="openThread(row.m)"
+            @contextmenu.stop.prevent
+          >
+            <i class="fa-solid fa-comments"></i>
+          </button>
         </div>
       </div>
     </template>
@@ -1198,6 +1209,25 @@ function toggleReaction(m: ChatMessage | undefined, r: ReactionChip): void {
     name: r.name,
     add: !r.mine,
   });
+}
+
+// "Open thread": only Slack messages (slackTs) in a real channel/DM — not inside
+// a thread buffer already.
+function canOpenThread(m: ChatMessage | undefined): boolean {
+  const sm = m as { slackTs?: string } | undefined;
+  return !!sm?.slackTs && !m?.target?.startsWith(':thread:');
+}
+// Open the thread as its own buffer in a NEW split pane beside the channel, and
+// ask the server to fetch + stream it. Roots at the parent ts (threadRoot) when
+// this row is a reply, else the row's own ts.
+function openThread(m: ChatMessage | undefined): void {
+  const sm = m as { slackTs?: string; threadRoot?: string } | undefined;
+  if (!m || !sm?.slackTs) return;
+  const threadTs = sm.threadRoot || sm.slackTs;
+  const threadTarget = `:thread:${m.target}:${threadTs}`;
+  const paneId = networks.openPane(null);
+  buffers.activate(m.networkId, threadTarget, { paneId });
+  socketSend({ type: 'thread-open', networkId: m.networkId, target: m.target, threadTs });
 }
 
 // True for any line type whose body is just `m.text` and should be split

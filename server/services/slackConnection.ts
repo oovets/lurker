@@ -64,6 +64,23 @@ interface ReactionChip {
   mine?: boolean;
 }
 
+// A Slack message rendered into the Lurker fields both ingest paths emit.
+interface BuiltMessage {
+  nick: string;
+  text: string;
+  self: boolean;
+  time: string;
+  reactions: ReactionChip[];
+}
+
+// A thread buffer's target is `:thread:<channelTarget>:<threadTs>` — readable
+// enough for the client to label ("#general › thread") and parse, while the
+// server resolves it to {channelId, threadTs} for fetching + posting replies.
+const THREAD_PREFIX = ':thread:';
+function threadTargetFor(channelTarget: string, threadTs: string): string {
+  return `${THREAD_PREFIX}${channelTarget}:${threadTs}`;
+}
+
 // Run an async fn over items with bounded concurrency — cuts cold-start time
 // (members + per-conversation history) from sum-of-calls to roughly
 // slowest-call × ceil(n/limit), while staying gentle on Slack's rate limits.
@@ -110,6 +127,12 @@ export class SlackConnection implements Connection {
   // Per-message set of reaction names the authenticated user has added, so chips
   // can show a "mine" state and click toggles add/remove.
   protected selfReactions = new Map<string, Set<string>>();
+  // Open threads: thread target → {channelId, threadTs} for send routing, and
+  // threadTs → thread target so live channel replies mirror into the open thread
+  // buffer. De-dup of thread rows keyed `${threadTarget}:${ts}`.
+  protected threads = new Map<string, { channelId: string; threadTs: string }>();
+  protected threadByTs = new Map<string, string>();
+  protected threadSeen = new Set<string>();
 
   protected web: WebClient | null = null;
   protected socket: SocketModeClient | null = null;
@@ -334,7 +357,8 @@ export class SlackConnection implements Connection {
         self: h.nick === 'me',
         extra: {
           demo: true,
-          ...(h.slackTs ? { slackTs: h.slackTs } : {}),
+          // Every demo line gets a slackTs so the "Open thread" affordance shows.
+          slackTs: h.slackTs || `demo-${h.ms}`,
           ...(h.reactions ? { reactions: h.reactions } : {}),
         },
         matchedRuleId: null,
@@ -383,17 +407,21 @@ export class SlackConnection implements Connection {
   // ── Outbound ──────────────────────────────────────────────────────────────
 
   say(target: string, text: string): void {
-    const channel = this.targetToId.get(target.toLowerCase());
+    // A thread buffer posts to its parent channel with thread_ts.
+    const thread = this.threads.get(target.toLowerCase());
+    const channel = thread?.channelId ?? this.targetToId.get(target.toLowerCase());
     if (!channel || !this.web) return;
-    void this.web.chat.postMessage({ channel, text }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.publishEphemeral({
-        type: 'notice',
-        target,
-        nick: 'lurker',
-        text: `send failed: ${msg}`,
+    void this.web.chat
+      .postMessage({ channel, text, ...(thread ? { thread_ts: thread.threadTs } : {}) })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.publishEphemeral({
+          type: 'notice',
+          target,
+          nick: 'lurker',
+          text: `send failed: ${msg}`,
+        });
       });
-    });
   }
 
   // Slack has no separate ACTION/NOTICE wire types — render both as a normal
@@ -597,8 +625,13 @@ export class SlackConnection implements Connection {
       kind: 'privmsg',
       self: built.self,
       // slackTs lets a live reaction update find this row client-side; reactions
-      // persist so chips survive a reload (both spread to top-level by rowToEvent).
-      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
+      // persist so chips survive a reload; threadRoot lets "open thread" root at
+      // the right ts (all spread to top-level by rowToEvent).
+      extra: {
+        slackTs: msg.ts,
+        ...(msg.thread_ts ? { threadRoot: msg.thread_ts } : {}),
+        ...(built.reactions.length ? { reactions: built.reactions } : {}),
+      },
       matchedRuleId: null,
       userhost: null,
       fromIgnored: false,
@@ -611,6 +644,12 @@ export class SlackConnection implements Connection {
     if (!channelId) return;
     const target = this.idToTarget.get(channelId);
     if (!target) return; // a conversation opened after connect — handled later
+    // If this is a reply in an open thread, mirror it into that thread buffer so
+    // the thread pane updates live (independently of the in-channel ↳ copy).
+    if (msg.thread_ts) {
+      const threadTarget = this.threadByTs.get(msg.thread_ts);
+      if (threadTarget) await this.publishThreadMessage(threadTarget, channelId, msg);
+    }
     const built = await this.buildMessage(channelId, target, msg);
     if (!built) return;
     this.publish({
@@ -623,8 +662,13 @@ export class SlackConnection implements Connection {
       time: built.time,
       // Top-level for the live client; mirrored into extra so a reload keeps them.
       slackTs: msg.ts,
+      threadRoot: msg.thread_ts,
       reactions: built.reactions,
-      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
+      extra: {
+        slackTs: msg.ts,
+        ...(msg.thread_ts ? { threadRoot: msg.thread_ts } : {}),
+        ...(built.reactions.length ? { reactions: built.reactions } : {}),
+      },
     });
   }
 
@@ -694,25 +738,131 @@ export class SlackConnection implements Connection {
     });
   }
 
+  // ── Threads ───────────────────────────────────────────────────────────────
+
+  // Open a thread as its own buffer beside the channel. Fetches the parent +
+  // replies, persists them under the thread target, and registers the thread so
+  // sends route to chat.postMessage(thread_ts) and live channel replies mirror
+  // in. Returns the thread buffer target (key) so the caller can render backlog.
+  async openThread(channelTarget: string, threadTs: string): Promise<string | null> {
+    const channelId = this.targetToId.get(channelTarget.toLowerCase());
+    if (!channelId || !threadTs) return null;
+    const threadTarget = threadTargetFor(channelTarget, threadTs);
+    this.threads.set(threadTarget.toLowerCase(), { channelId, threadTs });
+    this.threadByTs.set(threadTs, threadTarget);
+
+    let messages: SlackMessageShape[];
+    if (this.web) {
+      try {
+        const res = await this.web.conversations.replies({
+          channel: channelId,
+          ts: threadTs,
+          limit: 100,
+        });
+        messages = (res.messages || []) as SlackMessageShape[];
+      } catch {
+        messages = [];
+      }
+    } else {
+      // Demo: synthesize a tiny thread off the parent.
+      messages = [
+        { ts: threadTs, user: 'U_ALICE', text: 'starting a thread here' },
+        {
+          ts: `${threadTs}-r1`,
+          user: 'U_BOB',
+          text: 'replying in the thread',
+          thread_ts: threadTs,
+        },
+        {
+          ts: `${threadTs}-r2`,
+          user: 'U_ME',
+          text: 'live replies land here too',
+          thread_ts: threadTs,
+        },
+      ];
+    }
+    for (const m of messages) await this.persistThreadMessage(threadTarget, channelId, m);
+    return threadTarget;
+  }
+
+  // Persist one thread message under the thread buffer (own de-dup so the parent,
+  // which also lives in the channel, isn't skipped by the channel seenTs).
+  protected async persistThreadMessage(
+    threadTarget: string,
+    channelId: string,
+    msg: SlackMessageShape,
+  ): Promise<void> {
+    if (!msg.ts) return;
+    const key = `${threadTarget}:${msg.ts}`;
+    if (this.threadSeen.has(key)) return;
+    this.threadSeen.add(key);
+    const built = await this.renderMessage(channelId, msg, { inThread: true });
+    insertMessage({
+      networkId: this.network.id,
+      target: threadTarget,
+      time: built.time,
+      type: 'message',
+      nick: built.nick,
+      text: built.text,
+      kind: 'privmsg',
+      self: built.self,
+      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
+      matchedRuleId: null,
+      userhost: null,
+      fromIgnored: false,
+    });
+  }
+
+  // Live-publish a thread message (persist + fan out) so an open thread pane
+  // updates in real time.
+  protected async publishThreadMessage(
+    threadTarget: string,
+    channelId: string,
+    msg: SlackMessageShape,
+  ): Promise<void> {
+    if (!msg.ts) return;
+    const key = `${threadTarget}:${msg.ts}`;
+    if (this.threadSeen.has(key)) return;
+    this.threadSeen.add(key);
+    const built = await this.renderMessage(channelId, msg, { inThread: true });
+    this.publish({
+      type: 'message',
+      target: threadTarget,
+      nick: built.nick,
+      text: built.text,
+      kind: 'privmsg',
+      self: built.self,
+      time: built.time,
+      slackTs: msg.ts,
+      reactions: built.reactions,
+      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
+    });
+  }
+
   // Shared message mapping + de-dup. Returns null for messages we skip (edits,
   // deletes, joins, already-seen) so both ingest paths stay simple.
   protected async buildMessage(
     channelId: string,
     _target: string,
     msg: SlackMessageShape,
-  ): Promise<{
-    nick: string;
-    text: string;
-    self: boolean;
-    time: string;
-    reactions: ReactionChip[];
-  } | null> {
+  ): Promise<BuiltMessage | null> {
     if (!msg.ts) return null;
     // MVP scope: plain messages + bot messages only; skip edits/deletes/joins.
     if (msg.subtype && msg.subtype !== 'bot_message' && msg.subtype !== 'me_message') return null;
     const key = `${channelId}:${msg.ts}`;
     if (this.seenTs.has(key)) return null;
     this.seenTs.add(key);
+    return this.renderMessage(channelId, msg, {});
+  }
+
+  // Pure render of a Slack message into Lurker fields (no dedup/skip guards —
+  // the caller owns those). Shared by the channel and thread paths; `inThread`
+  // drops the inline ↳ marker since a thread buffer is already the conversation.
+  protected async renderMessage(
+    channelId: string,
+    msg: SlackMessageShape,
+    { inThread = false }: { inThread?: boolean },
+  ): Promise<BuiltMessage> {
     // App/bot lines (bot_id, usually no user) name themselves via bot_profile /
     // username / bots.info; real users via the user cache. Only a message with
     // neither falls back to 'unknown'.
@@ -725,26 +875,25 @@ export class SlackConnection implements Connection {
       nick = msg.username || 'unknown';
     }
     let text = this.formatText(msg.text || '');
-    // Thread replies (a thread_ts that isn't this message's own ts) flow inline
-    // in the channel with a marker, so a flat IRC-style buffer still reads as a
-    // conversation. A dedicated thread pane is a later iteration.
-    if (msg.thread_ts && msg.thread_ts !== msg.ts) text = `↳ ${text}`;
+    // In the channel, a thread reply gets a ↳ marker so a flat buffer still
+    // reads as a conversation; inside the thread buffer the marker is redundant.
+    if (!inThread && msg.thread_ts && msg.thread_ts !== msg.ts) text = `↳ ${text}`;
     // Reactions ride as structured data on the event (rendered as chips by the
     // client). Seed the per-message tally so live reaction_added/removed deltas
     // can recompute and push an updated set.
     const reactions: ReactionChip[] = (msg.reactions || [])
       .filter((r): r is { name: string; count?: number } => !!r.name)
       .map((r) => ({ name: r.name, count: r.count ?? 1 }));
-    if (reactions.length) {
+    if (reactions.length && msg.ts) {
       const tally = new Map<string, number>();
       for (const r of reactions) tally.set(r.name, r.count);
-      this.reactionTallies.set(key, tally);
+      this.reactionTallies.set(`${channelId}:${msg.ts}`, tally);
     }
     return {
       nick,
       text,
       self: !!msg.user && msg.user === this.selfId,
-      time: tsToIso(msg.ts),
+      time: msg.ts ? tsToIso(msg.ts) : new Date().toISOString(),
       reactions,
     };
   }
