@@ -455,6 +455,10 @@ export interface RenderSegment {
   // renderer turns it into a clickable join/switch affordance when it has a
   // network to act on, otherwise it renders as plain text.
   channel?: string;
+  // A Slack workspace-custom emoji: `emojiUrl` is the image, `text` holds the
+  // original `:name:` (the alt / copy-paste fallback). The renderer draws an
+  // inline <img>; non-message callers without a custom-emoji map never emit it.
+  emojiUrl?: string;
 }
 
 // Build a Vue inline-style object for a segment. Colour precedence: an

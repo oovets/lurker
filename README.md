@@ -22,6 +22,38 @@ Lurker runs as an always-on server that stays connected to IRC on your behalf, k
 - **Customizable UI.** The beautiful retro terminal-style interface has 40+ settings to customize it how you want, and you can freely pin and rearrange channels and DMs.
 - **Installable.** Lurker is a PWA — install it as a native-feeling app on your phone, Mac, or PC straight from the browser.
 
+# Fork additions
+
+This fork extends upstream Lurker with split-window panes, Slack support, and a
+richer composer. The full, itemized list is in [CHANGELOG.md](CHANGELOG.md);
+the highlights:
+
+- **Split-window panes (desktop).** Open several buffers side by side in an
+  auto-wrapping grid, with one shared input bound to the focused pane.
+  Right-click a buffer and choose "Open in Split" to add a pane.
+- **Slack support.** Slack is a first-class provider alongside IRC. A
+  `SlackConnection` implements the same connection contract as the IRC adapter,
+  so the server, history/read-state, and the entire Vue client drive it
+  unchanged. It covers:
+  - Connecting via an "Add to Slack" OAuth flow or by pasting bot/app tokens.
+  - Channels, DMs, and group DMs as buffers, with history backfill, live
+    messages, sending, typing indicators, and member lists.
+  - Threads in a live side-pane, reactions (including click-to-toggle and an
+    add-reaction picker), file and image attachments, message edits and
+    deletes, presence, page-up history, mark-as-read sync, and whole-workspace
+    search.
+  - Slack markup and Block Kit rendering, app/bot real names, and
+    workspace-custom emoji in both the message view and the composer.
+  - A credential-free demo mode (sentinel `demo` tokens) that exercises the
+    whole path without a real workspace.
+- **Composer.** ASCII emoticons (`:)`, `<3`, `:D`, ...) auto-convert to emoji as
+  you type, and the `:shortcode:` autocomplete now also surfaces a Slack
+  workspace's custom emoji.
+
+Slack OAuth is configured through the `SLACK_*` environment variables documented
+in [`.env.example`](.env.example); without them, Slack networks are added by
+pasting tokens in the network form.
+
 # Screenshot (as macOS PWA)
 
 <img src="docs/assets/screenshot.png" alt="Lurker IRC client screenshot" width="100%">
@@ -35,7 +67,7 @@ Lurker runs as an always-on server that stays connected to IRC on your behalf, k
 
 # Stack
 
-- **Server** — TypeScript on Node (run via `tsx`), Express, `irc-framework`, `ws`, `better-sqlite3`, `sharp`, `web-push`
+- **Server** — TypeScript on Node (run via `tsx`), Express, `irc-framework`, `ws`, `better-sqlite3`, `sharp`, `web-push`, `@slack/web-api`, `@slack/socket-mode`
 - **Client** — TypeScript, Vue 3, Vite, Pinia, `vue-router`
 - **Tooling** — Vitest, oxlint, oxfmt
 

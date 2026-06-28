@@ -1962,8 +1962,10 @@ const NAMES = Object.keys(EMOJI);
 export interface EmojiMatch {
   /** Shortcode body, no colons. */
   name: string;
-  /** The emoji glyph. */
+  /** The emoji glyph (empty for an image-based custom emoji). */
   emoji: string;
+  /** Image URL for a Slack workspace-custom emoji; absent for Unicode emoji. */
+  url?: string;
 }
 
 // Ranked shortcode matches for the suggester strip.

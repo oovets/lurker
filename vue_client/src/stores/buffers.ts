@@ -124,6 +124,8 @@ export interface BufferMessage {
   // roots at the parent rather than a reply.
   threadRoot?: string;
   reactions?: Array<{ name: string; count: number; mine?: boolean }>;
+  // Slack file attachments — same-origin proxy URL + image flag.
+  files?: Array<{ name: string; url: string; image?: boolean }>;
   [key: string]: unknown;
 }
 
@@ -699,6 +701,24 @@ export const useBuffersStore = defineStore('buffers', {
       if (!buf) return;
       const msg = buf.messages.find((m) => m.slackTs === slackTs);
       if (msg) msg.reactions = reactions.length ? reactions : undefined;
+    },
+    // Slack live edit: replace the message text in place (found by slackTs).
+    applyEdit(networkId: number | string, target: string, slackTs: string, text: string) {
+      if (!slackTs) return;
+      const buf = this.findByTarget(networkId, target);
+      const msg = buf?.messages.find((m) => m.slackTs === slackTs);
+      if (msg) msg.text = text;
+    },
+    // Slack live delete: tombstone the message (keep its slot, drop content).
+    applyDelete(networkId: number | string, target: string, slackTs: string) {
+      if (!slackTs) return;
+      const buf = this.findByTarget(networkId, target);
+      const msg = buf?.messages.find((m) => m.slackTs === slackTs);
+      if (msg) {
+        msg.text = '(message deleted)';
+        msg.reactions = undefined;
+        msg.files = undefined;
+      }
     },
     setChannelModes(networkId: number | string, target: string, modes: string) {
       const buf = ensureBuffer(this, networkId, target);

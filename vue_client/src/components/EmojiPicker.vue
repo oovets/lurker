@@ -30,7 +30,8 @@
   >
     <template #row="{ row }">
       <span class="emoji-line">
-        <span class="emoji-glyph">{{ row.emoji }}</span>
+        <img v-if="row.url" class="emoji-img" :src="row.url" :alt="`:${row.name}:`" />
+        <span v-else class="emoji-glyph">{{ row.emoji }}</span>
         <span class="emoji-name">:{{ row.name }}:</span>
       </span>
     </template>
@@ -38,9 +39,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { searchEmojiSync } from '../utils/emojiShortcodes.js';
 import { emojiFn } from '../composables/useEmoji.js';
+import { useSlackEmojiStore } from '../stores/slackEmoji.js';
 import VerticalPopover from './VerticalPopover.vue';
 import type { PopoverNav } from './popoverNav.js';
 import type { EmojiMatch } from '../utils/emojiData.js';
@@ -51,11 +53,14 @@ const props = withDefaults(
     // The shortcode body under the caret (no colons); 2+ chars (issue #402).
     query?: string;
     anchor?: HTMLElement | null;
+    // Active network, so a Slack workspace's custom emoji join the candidates.
+    networkId?: number | null;
   }>(),
   {
     open: false,
     query: '',
     anchor: null,
+    networkId: null,
   },
 );
 
@@ -64,12 +69,28 @@ const emit = defineEmits<{
   close: [];
 }>();
 
+const slackEmoji = useSlackEmojiStore();
+// Load the network's custom emoji the first time the picker opens for it.
+watch(
+  () => [props.open, props.networkId] as const,
+  ([open, nid]) => {
+    if (open && nid != null) void slackEmoji.ensure(nid);
+  },
+  { immediate: true },
+);
+
 const rows = computed<EmojiMatch[]>(() => {
   // emojiFn() reads the reactive emoji-ready signal (and is null until the
   // lazily-loaded table lands), so rows recompute once it's available. The
   // table is preloaded at app start, so it's normally ready by the first `:`.
   if (!props.open || !emojiFn()) return [];
-  return searchEmojiSync(props.query.trim(), 30);
+  const query = props.query.trim();
+  // Workspace-custom emoji first (closest to the input under `reverse`), then
+  // the Unicode matches, capped at 30 total.
+  const custom = slackEmoji
+    .search(props.networkId, query, 12)
+    .map((c) => ({ name: c.name, emoji: '', url: c.url }));
+  return [...custom, ...searchEmojiSync(query, 30)].slice(0, 30);
 });
 
 function rowKey(row: EmojiMatch): string {
@@ -101,6 +122,12 @@ defineExpose({
 }
 .emoji-glyph {
   flex: none;
+}
+.emoji-img {
+  flex: none;
+  height: 1.2em;
+  width: auto;
+  vertical-align: middle;
 }
 .emoji-name {
   color: var(--fg-muted);

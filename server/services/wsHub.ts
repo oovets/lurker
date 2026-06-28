@@ -392,6 +392,12 @@ export function buildResumeSlice(
   target: string,
   sinceId: number,
 ): { events: DecoratedEvent[]; reset: boolean; hasMoreOlder: boolean } {
+  // Slack buffers can always page older from the workspace beyond the local
+  // mirror (see the 'before' history handler), so force hasMoreOlder on so the
+  // client offers page-up. Server/thread buffers don't page.
+  const conn = ircManager.getConnection(userId, networkId);
+  const slackPageable =
+    conn?.provider === 'slack' && !target.startsWith(':server:') && !target.startsWith(':thread:');
   if (sinceId > 0) {
     const gap = listMessages(networkId, target, { afterId: sinceId, limit: RESUME_GAP_CAP });
     const lastGapId = gap.length ? (gap[gap.length - 1].id ?? sinceId) : sinceId;
@@ -400,7 +406,7 @@ export function buildResumeSlice(
       return {
         events: gap.map((e) => decorateMessage(userId, e)),
         reset: false,
-        hasMoreOlder: false,
+        hasMoreOlder: slackPageable,
       };
     }
     // Truncated: fall through to the latest-slice replace below.
@@ -413,7 +419,7 @@ export function buildResumeSlice(
     // on the client's empty-buffer seed path, which already replaces — flagging
     // reset there is harmless but needlessly noisy.
     reset: sinceId > 0,
-    hasMoreOlder: oldestId > 0 && hasOlderRow(networkId, target, oldestId),
+    hasMoreOlder: (oldestId > 0 && hasOlderRow(networkId, target, oldestId)) || slackPageable,
   };
 }
 
@@ -1760,6 +1766,11 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         if (networkId !== null && !networkId) break;
         const lastReadId = setReadState(userId, networkId, target, requested);
         broadcastReadState(userId, networkId, target, lastReadId);
+        // Mirror the read pointer back to Slack so the workspace clears unread.
+        if (networkId) {
+          const conn = ircManager.getConnection(userId, networkId);
+          if (conn?.provider === 'slack') conn.markRead(target, requested);
+        }
         break;
       }
       case 'clear-buffer': {
@@ -2147,6 +2158,25 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
           break;
         }
 
+        // Slack page-up: the local mirror only holds the backfilled window, so
+        // fetch the next older batch from the workspace (server-side ts cursor),
+        // persist it, and return it for the client to prepend. Threads load
+        // their replies in one shot, so they don't page.
+        if (conn.provider === 'slack' && !histTarget.startsWith(':thread:')) {
+          void conn.fetchOlder(histTarget).then((older) => {
+            if (ws.readyState !== ws.OPEN) return;
+            send(ws, {
+              ...baseReply,
+              before: msg.before || null,
+              events: older.events,
+              hasMoreOlder: older.hasMore,
+              hasMoreNewer: false,
+              hasMore: older.hasMore,
+            });
+          });
+          break;
+        }
+
         // 'before' (default, legacy). Delegates to the recent_messages verb —
         // shared with MCP — and wraps the value in the WS history reply shape
         // (mode/token/speakers + historical hasMore alias).
@@ -2178,36 +2208,69 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         break;
       }
       case 'search': {
-        // Delegates to the search_messages verb. The boundary check above
-        // already validated networkId ownership when a network filter was
-        // present; searchMessages itself self-scopes the global case to the
-        // caller's networks via its SQL join.
-        let result: { messages: WsPayload[]; hasMore: boolean };
-        try {
-          result = callVerb(
-            'search_messages',
-            { userId, scope: 'read-write', transport: 'ws' },
-            {
-              query: msg.query,
-              networkId: msg.networkId || undefined,
-              target: typeof msg.target === 'string' && msg.target ? msg.target : undefined,
-              nick: typeof msg.nick === 'string' && msg.nick ? msg.nick : undefined,
-              nicks: Array.isArray(msg.nicks) ? msg.nicks : undefined,
-              before: msg.before ? Number(msg.before) : undefined,
-              limit: msg.limit,
-            },
-          ) as { messages: WsPayload[]; hasMore: boolean };
-        } catch (_) {
-          send(ws, { kind: 'error', text: 'search failed' });
+        // Local FTS search over the message mirror. Delegates to the
+        // search_messages verb; the boundary check above already validated
+        // networkId ownership when a network filter was present, and
+        // searchMessages self-scopes the global case to the caller's networks
+        // via its SQL join. Factored so the Slack branch below can fall back to
+        // it without duplicating the send.
+        const runLocalSearch = (): void => {
+          let result: { messages: WsPayload[]; hasMore: boolean };
+          try {
+            result = callVerb(
+              'search_messages',
+              { userId, scope: 'read-write', transport: 'ws' },
+              {
+                query: msg.query,
+                networkId: msg.networkId || undefined,
+                target: typeof msg.target === 'string' && msg.target ? msg.target : undefined,
+                nick: typeof msg.nick === 'string' && msg.nick ? msg.nick : undefined,
+                nicks: Array.isArray(msg.nicks) ? msg.nicks : undefined,
+                before: msg.before ? Number(msg.before) : undefined,
+                limit: msg.limit,
+              },
+            ) as { messages: WsPayload[]; hasMore: boolean };
+          } catch (_) {
+            send(ws, { kind: 'error', text: 'search failed' });
+            return;
+          }
+          send(ws, {
+            kind: 'search-result',
+            token: msg.token ?? null,
+            results: result.messages,
+            hasMore: result.hasMore,
+            before: msg.before || null,
+          });
+        };
+
+        // A search scoped to a single Slack network goes to Slack's
+        // whole-workspace search.messages (covers history beyond the local
+        // mirror). It needs a user token; with a bot token it returns empty and
+        // we fall back to the local mirror search above.
+        const searchNetworkId = msg.networkId ? Number(msg.networkId) : 0;
+        const searchConn = searchNetworkId
+          ? ircManager.getConnection(userId, searchNetworkId)
+          : null;
+        if (searchConn?.provider === 'slack') {
+          void searchConn
+            .search(String(msg.query ?? ''), typeof msg.limit === 'number' ? msg.limit : 30)
+            .then((slack) => {
+              if (slack.messages.length) {
+                send(ws, {
+                  kind: 'search-result',
+                  token: msg.token ?? null,
+                  results: slack.messages as WsPayload[],
+                  hasMore: slack.hasMore,
+                  before: msg.before || null,
+                });
+              } else {
+                runLocalSearch();
+              }
+            })
+            .catch(() => runLocalSearch());
           break;
         }
-        send(ws, {
-          kind: 'search-result',
-          token: msg.token ?? null,
-          results: result.messages,
-          hasMore: result.hasMore,
-          before: msg.before || null,
-        });
+        runLocalSearch();
         break;
       }
       default:

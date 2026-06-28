@@ -122,6 +122,26 @@ export function insertMessage(row: MessageInput): { id: number | bigint; alt: bo
   return { id, alt: altRow?.alt === 1 };
 }
 
+const extraByIdStmt = db.prepare(
+  `SELECT extra FROM messages WHERE id = ? AND network_id = ? AND target = ?`,
+);
+
+// The parsed `extra` JSON for one message (provider extras like slackTs). Null
+// for a missing row or absent/invalid extra.
+export function getMessageExtra(
+  networkId: number,
+  target: string,
+  id: number,
+): Record<string, unknown> | null {
+  const row = extraByIdStmt.get(id, networkId, target) as { extra: string | null } | undefined;
+  if (!row?.extra) return null;
+  try {
+    return JSON.parse(row.extra) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 function rowToEvent(row: MessageRow): MessageEvent {
   const event: MessageEvent = {
     id: row.id,

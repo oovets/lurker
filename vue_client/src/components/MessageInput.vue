@@ -114,6 +114,7 @@
       :open="emojiPickerOpen"
       :query="emojiPickerQuery"
       :anchor="formEl"
+      :network-id="active?.networkId ?? null"
       @select="onEmojiSelect"
       @close="closeEmojiPicker"
     />
@@ -173,6 +174,7 @@ import {
   findCompletedShortcode,
   loadEmoji,
 } from '../utils/emojiShortcodes.js';
+import { findCompletedEmoticon } from '../utils/emoticons.js';
 import type { EmojiMatch } from '../utils/emojiData.js';
 import NickPicker from './NickPicker.vue';
 import ChannelPicker from './ChannelPicker.vue';
@@ -1214,15 +1216,19 @@ function onEmojiSelect(item: EmojiMatch): void {
   }
   const before = value.slice(0, sc.start);
   const after = value.slice(sc.end);
+  // Unicode emoji insert the glyph; a Slack custom emoji (image, no glyph)
+  // inserts its `:name:` shortcode — a textarea can't hold an inline image, and
+  // the server/renderer resolve the shortcode back to the image on display.
+  const insert = item.url ? `:${item.name}:` : item.emoji;
   cycling = true;
-  text.value = before + item.emoji + after;
+  text.value = before + insert + after;
   cycling = false;
   closeEmojiStrip();
   closeEmojiPicker();
   queueMicrotask(() => {
     const el = inputEl.value;
     if (!el) return;
-    const caret = before.length + item.emoji.length;
+    const caret = before.length + insert.length;
     el.focus();
     el.setSelectionRange(caret, caret);
   });
@@ -1232,6 +1238,31 @@ function onEmojiSelect(item: EmojiMatch): void {
 // closing `:` of a known shortcode. Async for the same lazy-chunk reason as
 // showEmojiStrip; the match is re-validated against live text before the
 // rewrite, in case the draft moved on while the chunk loaded.
+// Inline-convert a just-typed ASCII emoticon (`:)`, `<3`, `:D`, …) to its emoji
+// glyph. Synchronous — the emoticon table is a small static map, no lazy load —
+// and `cycling` guards the re-entrant onInput the text rewrite would otherwise
+// trigger. Mirrors maybeConvertShortcode's splice + caret-restore.
+function maybeConvertEmoticon() {
+  const el = inputEl.value;
+  if (!el) return;
+  const hit = findCompletedEmoticon(text.value, el.selectionStart ?? text.value.length);
+  if (!hit) return;
+  const value = text.value;
+  const before = value.slice(0, hit.start);
+  const after = value.slice(hit.end);
+  cycling = true;
+  text.value = before + hit.emoji + after;
+  cycling = false;
+  closeEmojiStrip();
+  queueMicrotask(() => {
+    const e2 = inputEl.value;
+    if (!e2) return;
+    const caret = before.length + hit.emoji.length;
+    e2.focus();
+    e2.setSelectionRange(caret, caret);
+  });
+}
+
 async function maybeConvertShortcode() {
   const el = inputEl.value;
   if (!el) return;
@@ -1533,8 +1564,10 @@ function onInput() {
   publishComposing(text.value);
   if (!sendable.value || !active.value) return;
   if (completion) resetCompletion();
-  // Inline-convert a just-completed `:shortcode:`, then refresh the suggester
-  // for whatever shortcode (if any) is still in progress at the caret.
+  // Inline-convert a just-typed ASCII emoticon (`:)` → 🙂), then a just-completed
+  // `:shortcode:`, then refresh the suggester for whatever shortcode (if any) is
+  // still in progress at the caret.
+  maybeConvertEmoticon();
   void maybeConvertShortcode();
   refreshPicker();
   const { networkId, target } = active.value;

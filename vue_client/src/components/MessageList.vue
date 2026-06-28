@@ -123,8 +123,36 @@
                 :title="`:${r.name}:`"
                 @click.stop="toggleReaction(row.m, r)"
               >
-                {{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}
+                <img
+                  v-if="reactionImageOf(r.name)"
+                  class="reaction-emoji"
+                  :src="reactionImageOf(r.name)!"
+                  :alt="`:${r.name}:`"
+                />
+                <template v-else>{{ reactionGlyph(r.name) }}</template
+                >&nbsp;{{ r.count }}
               </button>
+            </span>
+            <span v-if="filesOf(row.m).length" class="attachments">
+              <template v-for="f in filesOf(row.m)" :key="f.url">
+                <img
+                  v-if="f.image"
+                  :src="f.url"
+                  :alt="f.name"
+                  :title="f.name"
+                  class="attachment-img"
+                  @click.stop="openImage(f.url)"
+                />
+                <a
+                  v-else
+                  :href="f.url"
+                  target="_blank"
+                  rel="noopener"
+                  class="attachment-link"
+                  @click.stop
+                  >📎 {{ f.name }}</a
+                >
+              </template>
             </span>
           </span>
           <span class="time">{{ row.continuationTime ? '' : time(row.m?.time) }}</span>
@@ -253,8 +281,36 @@
                 :title="`:${r.name}:`"
                 @click.stop="toggleReaction(row.m, r)"
               >
-                {{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}
+                <img
+                  v-if="reactionImageOf(r.name)"
+                  class="reaction-emoji"
+                  :src="reactionImageOf(r.name)!"
+                  :alt="`:${r.name}:`"
+                />
+                <template v-else>{{ reactionGlyph(r.name) }}</template
+                >&nbsp;{{ r.count }}
               </button>
+            </span>
+            <span v-if="filesOf(row.m).length" class="attachments">
+              <template v-for="f in filesOf(row.m)" :key="f.url">
+                <img
+                  v-if="f.image"
+                  :src="f.url"
+                  :alt="f.name"
+                  :title="f.name"
+                  class="attachment-img"
+                  @click.stop="openImage(f.url)"
+                />
+                <a
+                  v-else
+                  :href="f.url"
+                  target="_blank"
+                  rel="noopener"
+                  class="attachment-link"
+                  @click.stop
+                  >📎 {{ f.name }}</a
+                >
+              </template>
             </span>
           </span>
         </template>
@@ -276,6 +332,17 @@
             @contextmenu.stop.prevent
           >
             <i :class="a.icon"></i>
+          </button>
+          <button
+            v-if="canOpenThread(row.m)"
+            type="button"
+            class="row-action"
+            title="Add reaction"
+            aria-label="Add reaction"
+            @click.stop="openReactionPicker(row.m, $event)"
+            @contextmenu.stop.prevent
+          >
+            <i class="fa-regular fa-face-smile"></i>
           </button>
           <button
             v-if="canOpenThread(row.m)"
@@ -308,6 +375,7 @@ import type { CSSProperties, ComponentPublicInstance } from 'vue';
 import { useNetworksStore, type AwayState } from '../stores/networks.js';
 import { useBuffersStore, type BufferMember } from '../stores/buffers.js';
 import { useSettingsStore } from '../stores/settings.js';
+import { useSlackEmojiStore } from '../stores/slackEmoji.js';
 import { useIgnoresStore } from '../stores/ignores.js';
 import { useHighlightRulesStore } from '../stores/highlightRules.js';
 import { socketSend } from '../composables/useSocket.js';
@@ -335,6 +403,8 @@ import NickRef from './NickRef.vue';
 import LinkedText from './LinkedText.vue';
 import RenderSegments from './RenderSegments.vue';
 import { emojiGlyph } from '../utils/emojiShortcodes.js';
+import { useImageModal } from '../composables/useImageModal.js';
+import { useContextMenu } from '../composables/useContextMenu.js';
 import IgnoreModal from './IgnoreModal.vue';
 import { useMessageActions } from '../composables/useMessageActions.js';
 import type {
@@ -459,9 +529,11 @@ const viewedToken = Symbol('viewed-buffer');
 const networks = useNetworksStore();
 const buffers = useBuffersStore();
 const settings = useSettingsStore();
+const slackEmoji = useSlackEmojiStore();
 const ignores = useIgnoresStore();
 const highlights = useHighlightRulesStore();
 const nicks = useNickColors();
+const imageModal = useImageModal();
 const { isMobile } = useViewport();
 
 const actionItalic = computed(() => !!settings.effective('look.action.italic'));
@@ -575,6 +647,16 @@ function setUnreadDividerEl(el: Element | ComponentPublicInstance | null): void 
 
 const buffer = computed(() => (viewKey.value ? buffers.byKey(viewKey.value) : null));
 const messages = computed(() => buffer.value?.messages || []);
+
+// Load the active network's custom emoji once (no-op + cached for IRC, which
+// returns an empty map). Feeds reaction + body rendering.
+watch(
+  () => buffer.value?.networkId,
+  (nid) => {
+    if (nid != null) void slackEmoji.ensure(nid);
+  },
+  { immediate: true },
+);
 
 const selfLower = computed(() => {
   const b = buffer.value;
@@ -1196,6 +1278,21 @@ function reactionsOf(m: ChatMessage | undefined): ReactionChip[] {
 function reactionGlyph(name: string): string {
   return emojiGlyph(name) || `:${name}:`;
 }
+// A workspace-custom reaction renders its image instead of a glyph; null for a
+// standard (Unicode) reaction, which falls back to reactionGlyph.
+function reactionImageOf(name: string): string | null {
+  return slackEmoji.url(buffer.value?.networkId ?? null, name);
+}
+
+// Slack file attachments (same-origin proxy URLs). Images render as a clickable
+// thumbnail that opens the image viewer; other files as a download link.
+type FileChip = { name: string; url: string; image?: boolean };
+function filesOf(m: ChatMessage | undefined): FileChip[] {
+  return (m as { files?: FileChip[] } | undefined)?.files ?? [];
+}
+function openImage(url: string): void {
+  imageModal.open(url);
+}
 // Click-to-react: toggle the user's reaction. The server's reactions.add/remove
 // round-trip echoes a `reaction` event back that updates the chips.
 function toggleReaction(m: ChatMessage | undefined, r: ReactionChip): void {
@@ -1209,6 +1306,38 @@ function toggleReaction(m: ChatMessage | undefined, r: ReactionChip): void {
     name: r.name,
     add: !r.mine,
   });
+}
+
+// Add-any-reaction: a small picker of common emoji (reusing the global context
+// menu) — clicking sends `react add` for that name. A full emoji search is a
+// later refinement.
+const reactionMenu = useContextMenu();
+const COMMON_REACTIONS = [
+  'thumbsup',
+  'heart',
+  'tada',
+  'eyes',
+  'white_check_mark',
+  'joy',
+  'fire',
+  'rocket',
+];
+function openReactionPicker(m: ChatMessage | undefined, ev: MouseEvent): void {
+  const slackTs = (m as { slackTs?: string } | undefined)?.slackTs;
+  if (!m || !slackTs) return;
+  const items = COMMON_REACTIONS.map((name) => ({
+    label: `${reactionGlyph(name)}  :${name}:`,
+    onClick: () =>
+      socketSend({
+        type: 'react',
+        networkId: m.networkId,
+        target: m.target,
+        slackTs,
+        name,
+        add: true,
+      }),
+  }));
+  reactionMenu.open(items, ev.clientX, ev.clientY);
 }
 
 // "Open thread": only Slack messages (slackTs) in a real channel/DM — not inside
@@ -1239,15 +1368,53 @@ function hasInlineText(m: ChatMessage | undefined): boolean {
 
 function textSegments(m: ChatMessage | undefined): RenderSegment[] {
   if (!m) return [];
-  if (m.type === 'action') {
-    // Body is "<nick> <text>" — author's nick then the action text.
-    return nicks.splitText(
-      `${m.nick} ${m.text || ''}`,
-      nickSet.value,
-      selfLower.value,
-    ) as RenderSegment[];
+  const base =
+    m.type === 'action'
+      ? // Body is "<nick> <text>" — author's nick then the action text.
+        (nicks.splitText(
+          `${m.nick} ${m.text || ''}`,
+          nickSet.value,
+          selfLower.value,
+        ) as RenderSegment[])
+      : (nicks.splitText(m.text || '', nickSet.value, selfLower.value) as RenderSegment[]);
+  return expandCustomEmoji(base, m.networkId);
+}
+
+// Slack workspace-custom emoji (`:name:` with a known image) can't resolve to a
+// Unicode glyph, so they survive splitText as literal text. Split those bare
+// text runs into image segments the renderer draws as inline <img>. Reads the
+// reactive emoji map, so rows repaint once a network's custom emoji land.
+const CUSTOM_EMOJI_RE = /:([a-z0-9_+'-]+):/gi;
+function expandCustomEmoji(segs: RenderSegment[], networkId: number | undefined): RenderSegment[] {
+  if (networkId == null) return segs;
+  const out: RenderSegment[] = [];
+  for (const seg of segs) {
+    const keys = Object.keys(seg);
+    // Only split plain text runs; links/nicks/channels/glyphs/styled runs pass
+    // through untouched.
+    if (!(keys.length === 1 && keys[0] === 'text') || !seg.text.includes(':')) {
+      out.push(seg);
+      continue;
+    }
+    let last = 0;
+    let matched = false;
+    CUSTOM_EMOJI_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = CUSTOM_EMOJI_RE.exec(seg.text))) {
+      const url = slackEmoji.url(networkId, m[1]);
+      if (!url) continue;
+      matched = true;
+      if (m.index > last) out.push({ text: seg.text.slice(last, m.index) });
+      out.push({ text: m[0], emojiUrl: url });
+      last = m.index + m[0].length;
+    }
+    if (!matched) {
+      out.push(seg);
+      continue;
+    }
+    if (last < seg.text.length) out.push({ text: seg.text.slice(last) });
   }
-  return nicks.splitText(m.text || '', nickSet.value, selfLower.value) as RenderSegment[];
+  return out;
 }
 
 // Template helpers for consolidation row items — vue-tsc can't narrow
@@ -2009,6 +2176,30 @@ watch(
 .reaction-chip.mine {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Slack file attachments: image thumbnails + file links under the message. */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: 1ch;
+  vertical-align: baseline;
+}
+.attachment-img {
+  max-height: 180px;
+  max-width: 320px;
+  border-radius: var(--radius-1, 4px);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  object-fit: cover;
+}
+.attachment-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.attachment-link:hover {
+  text-decoration: underline;
 }
 /* .msg-link styling lives in src/assets/main.css (shared with the topic bar). */
 

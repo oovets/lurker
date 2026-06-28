@@ -145,6 +145,17 @@
           </div>
         </template>
         <template v-else>
+          <div v-if="!isEdit && slackOauthAvailable" class="slack-oauth">
+            <button type="button" class="slack-oauth-btn" @click="startSlackOauth">
+              <i class="fa-brands fa-slack"></i>
+              <span>Add to Slack</span>
+            </button>
+            <small class="slack-hint">
+              One click grants the workspace's bot token — no copy-paste. You'll return here once
+              you approve in Slack.
+            </small>
+            <div class="slack-or"><span>or enter tokens manually</span></div>
+          </div>
           <label>
             <span>Bot/User token</span>
             <input
@@ -211,12 +222,13 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed } from 'vue';
+import { reactive, ref, computed, onMounted } from 'vue';
 import AppModal from './AppModal.vue';
 import NetworkPicker from './NetworkPicker.vue';
 import { useNetworksStore, type Network } from '../stores/networks.js';
 import { useConfigStore } from '../stores/config.js';
 import { LURKER_TAG, type BuiltinNetwork } from '../utils/builtinNetworks.js';
+import { api } from '../api.js';
 
 const props = withDefaults(
   defineProps<{
@@ -258,6 +270,26 @@ const form = reactive({
 });
 
 const isSlack = computed(() => form.provider === 'slack');
+
+// Whether the server has Slack OAuth credentials configured. When true (and
+// we're creating, not editing) we offer the one-click "Add to Slack" button and
+// the manual token fields become the fallback for self-hosters without an app.
+const slackOauthAvailable = ref(false);
+onMounted(async () => {
+  try {
+    const { configured } = await api<{ configured: boolean }>('/api/slack/oauth/config');
+    slackOauthAvailable.value = !!configured;
+  } catch {
+    slackOauthAvailable.value = false;
+  }
+});
+
+// Hand off to the server's OAuth start endpoint via a top-level navigation so
+// the session cookie rides along and Slack can redirect the browser back.
+function startSlackOauth(): void {
+  const name = (form.name || '').trim();
+  window.location.href = `/api/slack/oauth/start?name=${encodeURIComponent(name)}`;
+}
 
 // Auto-expand advanced when editing a row that already has any advanced value
 // set, so the user doesn't have to hunt for a saved password or connect script
@@ -575,5 +607,43 @@ label small {
 .error {
   color: var(--bad);
   margin: 0;
+}
+.slack-oauth {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.slack-oauth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.slack-oauth-btn:hover {
+  filter: brightness(1.08);
+}
+.slack-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+  color: var(--muted, #888);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.slack-or::before,
+.slack-or::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border, #444);
 }
 </style>

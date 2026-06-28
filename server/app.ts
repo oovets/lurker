@@ -15,6 +15,7 @@ import path from 'path';
 
 import authRouter from './routes/auth.js';
 import networksRouter from './routes/networks.js';
+import slackOauthRouter from './routes/slackOauth.js';
 import settingsRouter from './routes/settings.js';
 import highlightRulesRouter from './routes/highlightRules.js';
 import highlightsRouter from './routes/highlights.js';
@@ -53,6 +54,7 @@ export function buildApp(sessionSecret: string): Express {
 
   app.use('/api/auth', authRouter);
   app.use('/api/networks', networksRouter);
+  app.use('/api/slack', slackOauthRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/highlight-rules', highlightRulesRouter);
   app.use('/api/highlights', highlightsRouter);

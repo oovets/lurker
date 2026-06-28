@@ -29,7 +29,7 @@ import type {
   EnrichedEvent,
   IrcEvent,
 } from './ircConnection.js';
-import { insertMessage } from '../db/messages.js';
+import { insertMessage, getMessageExtra } from '../db/messages.js';
 
 // Slack event types we mirror into Lurker's message history. Everything else
 // (state, typing) is transient and rides publishEphemeral.
@@ -37,11 +37,21 @@ const PERSISTED_SLACK_TYPES = new Set(['message', 'action']);
 
 // How many recent messages to backfill per conversation on connect, and how
 // many channel members to pull for the nicklist. Kept modest to stay well under
-// Slack's rate limits on a cold start; page-up history is a later iteration.
+// Slack's rate limits on a cold start; older history is paged in on demand via
+// fetchOlder when the user scrolls up.
 const BACKFILL_LIMIT = 40;
 const MEMBERS_LIMIT = 100;
 // Parallel Slack calls during cold-start (members + per-conversation history).
 const CONCURRENCY = 6;
+
+interface SlackFileShape {
+  id?: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  url_private?: string;
+  url_private_download?: string;
+}
 
 interface SlackMessageShape {
   ts?: string;
@@ -53,6 +63,21 @@ interface SlackMessageShape {
   username?: string;
   bot_profile?: { name?: string };
   reactions?: Array<{ name?: string; count?: number }>;
+  files?: SlackFileShape[];
+  // Block Kit payload — present on app/bot messages (and rich-text user posts)
+  // that carry no plain `text`. Walked by textFromBlocks as a fallback.
+  blocks?: unknown[];
+  // message_changed carries the edited message; message_deleted the deleted ts.
+  message?: SlackMessageShape;
+  deleted_ts?: string;
+}
+
+// An attachment as rendered by the client: a name, whether it's an image, and a
+// same-origin proxy URL (the server fetches Slack's auth-gated url_private).
+interface FileChip {
+  name: string;
+  url: string;
+  image: boolean;
 }
 
 // One emoji reaction on a message — rendered as a chip by the client. `mine`
@@ -71,6 +96,7 @@ interface BuiltMessage {
   self: boolean;
   time: string;
   reactions: ReactionChip[];
+  files: FileChip[];
 }
 
 // A thread buffer's target is `:thread:<channelTarget>:<threadTs>` — readable
@@ -94,6 +120,79 @@ async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>
     }
   });
   await Promise.all(workers);
+}
+
+// ── Block Kit walkers (pure) ──
+function asRecord(x: unknown): Record<string, unknown> | null {
+  return x && typeof x === 'object' ? (x as Record<string, unknown>) : null;
+}
+function asArray(x: unknown): unknown[] {
+  return Array.isArray(x) ? x : [];
+}
+// A Block Kit "text object" ({type:'mrkdwn'|'plain_text', text}). mrkdwn already
+// carries the markers formatText resolves; plain_text is returned verbatim.
+function textObject(x: unknown): string {
+  const rec = asRecord(x);
+  return rec && typeof rec.text === 'string' ? rec.text : '';
+}
+// One leaf element inside a rich_text_section: text/link/user/channel/emoji/etc.
+// → the equivalent Slack mrkdwn marker, applying inline styles for text runs.
+function richLeaf(x: unknown): string {
+  const el = asRecord(x);
+  if (!el) return '';
+  switch (el.type) {
+    case 'text': {
+      let t = typeof el.text === 'string' ? el.text : '';
+      const style = asRecord(el.style);
+      if (style?.code) t = `\`${t}\``;
+      if (style?.bold) t = `*${t}*`;
+      if (style?.italic) t = `_${t}_`;
+      if (style?.strike) t = `~${t}~`;
+      return t;
+    }
+    case 'link': {
+      const url = typeof el.url === 'string' ? el.url : '';
+      const text = typeof el.text === 'string' ? el.text : '';
+      return text ? `<${url}|${text}>` : `<${url}>`;
+    }
+    case 'user':
+      return `<@${el.user_id}>`;
+    case 'usergroup':
+      return `<!subteam^${el.usergroup_id}>`;
+    case 'channel':
+      return `<#${el.channel_id}>`;
+    case 'emoji':
+      return `:${el.name}:`;
+    case 'broadcast':
+      return `<!${el.range}>`;
+    default:
+      return typeof el.text === 'string' ? el.text : '';
+  }
+}
+// One top-level rich_text child: a section, list, quote, or preformatted block.
+function richElement(x: unknown): string {
+  const el = asRecord(x);
+  if (!el) return '';
+  const inline = (elements: unknown): string => asArray(elements).map(richLeaf).join('');
+  switch (el.type) {
+    case 'rich_text_section':
+      return inline(el.elements);
+    case 'rich_text_preformatted':
+      return `\`\`\`\n${inline(el.elements)}\n\`\`\``;
+    case 'rich_text_quote':
+      return inline(el.elements)
+        .split('\n')
+        .map((l) => `> ${l}`)
+        .join('\n');
+    case 'rich_text_list': {
+      const ordered = el.style === 'ordered';
+      return asArray(el.elements)
+        .map((item, i) => `${ordered ? `${i + 1}.` : '•'} ${inline(asRecord(item)?.elements)}`)
+        .join('\n');
+    }
+    default:
+      return inline(el.elements);
+  }
 }
 
 export class SlackConnection implements Connection {
@@ -137,6 +236,18 @@ export class SlackConnection implements Connection {
   protected threads = new Map<string, { channelId: string; threadTs: string }>();
   protected threadByTs = new Map<string, string>();
   protected threadSeen = new Set<string>();
+  // Oldest Slack ts mirrored per buffer target — the cursor for page-up. The
+  // client's history `before` request only signals "give me older"; we page from
+  // here (not the client's id), persist, and prepend.
+  protected oldestTs = new Map<string, string>();
+  // Demo-only: how many older pages have been synthesized per target.
+  protected demoOlderPages = new Map<string, number>();
+  // Slack file id → download metadata, for the same-origin proxy route that
+  // streams Slack's auth-gated url_private to the browser.
+  protected files = new Map<string, { url: string; mimetype: string; name: string }>();
+  // Workspace-custom emoji: shortcode name → image URL (alias chains resolved).
+  // Served to the client via the slack-emoji route for autocomplete + rendering.
+  protected customEmoji = new Map<string, string>();
 
   protected web: WebClient | null = null;
   protected socket: SocketModeClient | null = null;
@@ -185,6 +296,7 @@ export class SlackConnection implements Connection {
     this.selfDisplayName = auth.user || 'me';
 
     await this.seedUserNames();
+    await this.loadCustomEmoji();
     await this.loadConversations();
     await this.backfillAll();
 
@@ -255,12 +367,23 @@ export class SlackConnection implements Connection {
   protected async connectDemo(): Promise<void> {
     this.selfId = 'U_ME';
     this.selfDisplayName = 'me';
+    // Two fake workspace-custom emoji (inline SVG data URLs) so the demo shows
+    // custom emoji in the autocomplete, message bodies, and reaction chips
+    // without a real workspace.
+    this.customEmoji.set(
+      'parrot',
+      'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCI+PGNpcmNsZSBjeD0iMTAiIGN5PSIxMCIgcj0iOSIgZmlsbD0iIzJlYzU1YyIvPjxjaXJjbGUgY3g9IjEzIiBjeT0iOCIgcj0iMiIgZmlsbD0iIzExMSIvPjwvc3ZnPg==',
+    );
+    this.customEmoji.set(
+      'lurker',
+      'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCI+PHJlY3Qgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNCIgZmlsbD0iIzNhYTBhMCIvPjx0ZXh0IHg9IjEwIiB5PSIxNSIgZmlsbD0iI2ZmZiIgZm9udC1zaXplPSIxMiIgdGV4dC1hbmNob3I9Im1pZGRsZSI+TDwvdGV4dD48L3N2Zz4=',
+    );
     for (const [id, name] of [
       ['U_ME', 'me'],
       ['U_ALICE', 'Alice'],
       ['U_BOB', 'Bob'],
     ] as const) {
-      this.userNames.set(id, name);
+      this.rememberUser(id, name);
     }
 
     const demoChannels: Array<{ id: string; name: string; topic: string; members: string[] }> = [
@@ -281,12 +404,51 @@ export class SlackConnection implements Connection {
       });
     }
     this.mapTarget('Alice', 'D_ALICE');
+    // A group DM (mpim) — named by its participants, like the real adapter.
+    this.mapTarget('Alice, Bob', 'G_DEMO');
+
+    // A genuine Block Kit message run through the real block walker + markup
+    // resolver, so the demo proves the blocks-only render path end to end.
+    const blockKitText = this.formatText(
+      this.textFromBlocks([
+        {
+          type: 'rich_text',
+          elements: [
+            {
+              type: 'rich_text_section',
+              elements: [
+                { type: 'text', text: 'release out — see ' },
+                { type: 'link', url: 'https://lurker.chat', text: 'notes' },
+              ],
+            },
+            {
+              type: 'rich_text_list',
+              style: 'bullet',
+              elements: [
+                {
+                  type: 'rich_text_section',
+                  elements: [{ type: 'text', text: 'group DMs show names' }],
+                },
+                {
+                  type: 'rich_text_section',
+                  elements: [{ type: 'text', text: 'Block Kit messages render' }],
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
 
     const now = Date.now();
     // Raw Slack-style markup in a couple of lines so the GUI visibly shows the
     // mention/channel/link resolution; one line carries reactions (chips) and
     // a stable slackTs so the drip below can bump a reaction live.
     const RX_TS = 'demo-rx';
+    // A tiny inline SVG so the attachment renderer shows an image without any
+    // network (real Slack files stream through the auth proxy route).
+    const demoImg =
+      'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMTEwIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjExMCIgcng9IjgiIGZpbGw9IiMzYWEwYTAiLz48dGV4dCB4PSIxMDAiIHk9IjYwIiBmaWxsPSIjZmZmIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNiIgdGV4dC1hbmNob3I9Im1pZGRsZSI+ZGVtbyBpbWFnZTwvdGV4dD48L3N2Zz4=';
     const history: Array<{
       target: string;
       nick: string;
@@ -294,6 +456,7 @@ export class SlackConnection implements Connection {
       ms: number;
       reactions?: ReactionChip[];
       slackTs?: string;
+      files?: FileChip[];
     }> = [
       {
         target: '#general',
@@ -327,8 +490,15 @@ export class SlackConnection implements Connection {
         reactions: [
           { name: 'tada', count: 3 },
           { name: 'rocket', count: 2 },
+          { name: 'parrot', count: 4 },
         ],
         slackTs: RX_TS,
+      },
+      {
+        target: '#general',
+        nick: 'Alice',
+        text: 'workspace-custom emoji render too: :parrot: :lurker:',
+        ms: now - 34_000,
       },
       {
         target: '#general',
@@ -337,12 +507,34 @@ export class SlackConnection implements Connection {
         ms: now - 33_000,
       },
       {
+        target: '#general',
+        nick: 'me',
+        text: 'here are the attachments',
+        ms: now - 31_000,
+        files: [
+          { name: 'demo image.svg', url: demoImg, image: true },
+          { name: 'report.pdf', url: 'https://example.com/report.pdf', image: false },
+        ],
+      },
+      {
         target: '#random',
         nick: 'Alice',
         text: 'random thoughts land in <#C_RND|random>',
         ms: now - 30_000,
       },
+      {
+        target: '#general',
+        nick: 'ReleaseBot',
+        text: blockKitText,
+        ms: now - 28_000,
+      },
       { target: 'Alice', nick: 'Alice', text: 'hey, this is a direct message', ms: now - 20_000 },
+      {
+        target: 'Alice, Bob',
+        nick: 'Bob',
+        text: 'group DM — the three of us in one buffer',
+        ms: now - 15_000,
+      },
     ];
     for (const h of history) {
       if (h.reactions && h.slackTs) {
@@ -364,6 +556,7 @@ export class SlackConnection implements Connection {
           // Every demo line gets a slackTs so the "Open thread" affordance shows.
           slackTs: h.slackTs || `demo-${h.ms}`,
           ...(h.reactions ? { reactions: h.reactions } : {}),
+          ...(h.files ? { files: h.files } : {}),
         },
         matchedRuleId: null,
         userhost: null,
@@ -410,13 +603,18 @@ export class SlackConnection implements Connection {
 
   // ── Outbound ──────────────────────────────────────────────────────────────
 
-  // Encode `@name` (or `@handle`) mentions into Slack's `<@id>` syntax — the
-  // only form that notifies the mentioned user. Unknown names are left as-is.
+  // Encode `@name`/`@handle` → `<@id>` (the only form that notifies) and
+  // `#channel` → `<#Cid|channel>` (so it links). Unknown names are left as-is.
   protected encodeMentions(text: string): string {
-    return text.replace(/@([a-z0-9._-]+)/gi, (whole, name: string) => {
-      const id = this.nameToId.get(name.toLowerCase());
-      return id ? `<@${id}>` : whole;
-    });
+    return text
+      .replace(/@([a-z0-9._-]+)/gi, (whole, name: string) => {
+        const id = this.nameToId.get(name.toLowerCase());
+        return id ? `<@${id}>` : whole;
+      })
+      .replace(/(^|[\s(])#([a-z0-9_-]+)/gi, (whole, pre: string, name: string) => {
+        const id = this.targetToId.get(`#${name}`.toLowerCase());
+        return id ? `${pre}<#${id}|${name}>` : whole;
+      });
   }
 
   say(target: string, text: string): void {
@@ -447,16 +645,154 @@ export class SlackConnection implements Connection {
     this.say(target, text);
   }
 
-  // Channels are joined implicitly by membership; the MVP doesn't issue
-  // conversations.join. No-ops keep the manager's join/part calls harmless.
-  join(_channel: string): void {}
-  part(_channel: string, _reason?: string): void {}
+  // Join a channel the bot isn't a member of yet. The manager's join is
+  // fire-and-forget (void), so the async work runs detached; on success a fresh
+  // 'connected' snapshot re-publishes the buffer list with the new channel +
+  // its backfilled history.
+  join(channel: string): void {
+    void this.joinAsync(channel).catch(() => {});
+  }
+  protected async joinAsync(channel: string): Promise<void> {
+    if (!this.web) return;
+    const name = channel.replace(/^#+/, '');
+    const target = `#${name}`;
+    const id =
+      this.targetToId.get(target.toLowerCase()) || (await this.resolveChannelIdByName(name));
+    if (!id) return;
+    try {
+      await this.web.conversations.join({ channel: id });
+    } catch {
+      // Already a member, or a private channel we can't self-join — fall through
+      // and surface whatever history the token can read.
+    }
+    this.mapTarget(target, id);
+    if (!this.channels.has(target.toLowerCase())) {
+      this.channels.set(target.toLowerCase(), {
+        name: target,
+        topic: null,
+        members: new Map<string, ChannelMember>(),
+        modes: new Set<string>(),
+      });
+    }
+    await this.fillMembers(id);
+    await this.backfill(id);
+    this.setState('connected');
+  }
+
+  // Leave a channel. Best-effort conversations.leave + drop the buffer from the
+  // snapshot; like join, a fresh 'connected' snapshot reconciles the client.
+  part(channel: string, _reason?: string): void {
+    void this.partAsync(channel).catch(() => {});
+  }
+  protected async partAsync(channel: string): Promise<void> {
+    if (!this.web) return;
+    const target = `#${channel.replace(/^#+/, '')}`;
+    const id = this.targetToId.get(target.toLowerCase());
+    if (!id) return;
+    try {
+      await this.web.conversations.leave({ channel: id });
+    } catch {
+      /* best-effort */
+    }
+    this.channels.delete(target.toLowerCase());
+    this.setState('connected');
+  }
+
+  // Lazily index every public/private channel by name (not just the ones the
+  // bot has joined) so join('#name') can resolve an id. Cached for the session.
+  protected allChannelsByName: Map<string, string> | null = null;
+  protected async resolveChannelIdByName(name: string): Promise<string | undefined> {
+    if (!this.web) return undefined;
+    if (!this.allChannelsByName) {
+      const map = new Map<string, string>();
+      let cursor: string | undefined;
+      do {
+        const res = await this.web.conversations.list({
+          types: 'public_channel,private_channel',
+          exclude_archived: true,
+          limit: 200,
+          cursor,
+        });
+        for (const ch of res.channels || []) {
+          if (ch.id && ch.name) map.set(ch.name.toLowerCase(), ch.id);
+        }
+        cursor = res.response_metadata?.next_cursor || undefined;
+      } while (cursor);
+      this.allChannelsByName = map;
+    }
+    return this.allChannelsByName.get(name.toLowerCase());
+  }
   // Sending typing to Slack needs the socket-mode write path; skipped for MVP.
   sendTyping(_target: string, _state: string): void {}
   raw(_line: string): void {}
 
-  // Presence/contacts — Slack presence is a later iteration; no-op for MVP.
-  probePresence(_nick: string | undefined | null): void {}
+  // Whole-workspace search via search.messages. Needs a **user token** with
+  // search:read — a bot token (the OAuth default) gets not_allowed_token_type,
+  // which we swallow and return empty so wsHub falls back to local mirror search.
+  // Rows carry a synthetic negative id: it keeps the client's result keys unique
+  // and, on jump, simply opens the channel buffer (no exact-message scroll, since
+  // a global hit may live outside the mirrored window).
+  async search(
+    query: string,
+    limit = 30,
+  ): Promise<{ messages: Record<string, unknown>[]; hasMore: boolean }> {
+    if (!this.web || !query.trim()) return { messages: [], hasMore: false };
+    let res: Awaited<ReturnType<NonNullable<typeof this.web>['search']['messages']>>;
+    try {
+      res = await this.web.search.messages({
+        query,
+        count: Math.min(Math.max(limit, 1), 100),
+        sort: 'timestamp',
+      });
+    } catch {
+      return { messages: [], hasMore: false };
+    }
+    const matches = res.messages?.matches || [];
+    const out: Record<string, unknown>[] = [];
+    let synth = -1;
+    for (const m of matches) {
+      const channelId = m.channel?.id;
+      const target =
+        (channelId && this.idToTarget.get(channelId)) || `#${m.channel?.name || channelId || ''}`;
+      const nick = m.username || (m.user ? await this.resolveUserName(m.user) : 'unknown');
+      out.push({
+        id: synth,
+        networkId: this.network.id,
+        target,
+        nick,
+        text: this.formatText(m.text || ''),
+        time: m.ts ? tsToIso(m.ts) : new Date().toISOString(),
+      });
+      synth -= 1;
+    }
+    const paging = res.messages?.paging;
+    return { messages: out, hasMore: (paging?.page ?? 1) < (paging?.pages ?? 1) };
+  }
+
+  // DM peer presence: Lurker probes on opening a DM. Slack has no live presence
+  // over socket mode, so we answer on demand via users.getPresence and publish
+  // the same peer-presence event IRC does (online/away). Demo fakes 'online'.
+  probePresence(nick: string | undefined | null): void {
+    if (!nick) return;
+    const userId = this.nameToId.get(nick.toLowerCase());
+    if (!userId) return;
+    const emit = (state: 'online' | 'away') =>
+      this.publishEphemeral({
+        type: 'peer-presence',
+        nick,
+        state,
+        stateAt: new Date().toISOString(),
+        awayMessage: null,
+      });
+    if (!this.web) {
+      emit('online');
+      return;
+    }
+    void this.web.users
+      .getPresence({ user: userId })
+      .then((res) => emit((res.presence as string) === 'active' ? 'online' : 'away'))
+      .catch(() => {});
+  }
   trackDmPeer(_nick: string | undefined | null): boolean {
     return false;
   }
@@ -539,6 +875,36 @@ export class SlackConnection implements Connection {
     }
   }
 
+  // Pull the workspace's custom emoji (emoji.list) into a name→image-URL map.
+  // Values are either an image URL or `alias:other` — alias chains are resolved
+  // to the underlying image (bounded hops so a cyclic alias can't loop). Best
+  // effort: a token without emoji:read just leaves the map empty.
+  protected async loadCustomEmoji(): Promise<void> {
+    if (!this.web) return;
+    let raw: Record<string, string>;
+    try {
+      const res = (await this.web.emoji.list()) as { emoji?: Record<string, string> };
+      raw = res.emoji || {};
+    } catch {
+      return;
+    }
+    const resolve = (name: string, hops: number): string | null => {
+      const val = raw[name];
+      if (!val) return null;
+      if (val.startsWith('alias:')) return hops > 0 ? resolve(val.slice(6), hops - 1) : null;
+      return /^https?:\/\//.test(val) ? val : null;
+    };
+    for (const name of Object.keys(raw)) {
+      const url = resolve(name, 5);
+      if (url) this.customEmoji.set(name, url);
+    }
+  }
+
+  // The custom-emoji registry as a plain object, for the slack-emoji route.
+  emojiMap(): Record<string, string> {
+    return Object.fromEntries(this.customEmoji);
+  }
+
   // Build channel + DM buffers from the user's conversations, populating the
   // target↔id maps and (for channels) the nicklist. Member lists are fetched in
   // parallel after the (fast) conversation list, rather than serially per
@@ -561,6 +927,11 @@ export class SlackConnection implements Connection {
           // its backfilled history lands (DMs aren't snapshot channels).
           const peer = await this.resolveUserName(ch.user);
           this.mapTarget(peer, ch.id);
+        } else if (ch.is_mpim) {
+          // Group DM — Slack names these `mpdm-alice--bob--carol-1`. Render a
+          // readable participant list and treat it like a DM buffer (no nicklist),
+          // so it appears once its backfilled history lands.
+          this.mapTarget(this.mpimLabel(ch.name), ch.id);
         } else {
           const name = `#${ch.name || ch.id}`;
           this.mapTarget(name, ch.id);
@@ -581,6 +952,16 @@ export class SlackConnection implements Connection {
   protected mapTarget(target: string, channelId: string): void {
     this.targetToId.set(target.toLowerCase(), channelId);
     this.idToTarget.set(channelId, target);
+  }
+
+  // `mpdm-alice--bob--carol-1` → `alice, bob, carol`. The members are encoded as
+  // `--`-separated usernames between an `mpdm-` prefix and a trailing `-<n>`
+  // counter. Falls back to the raw name (or 'group') when it doesn't match.
+  protected mpimLabel(name: string | undefined): string {
+    if (!name) return 'group';
+    const inner = name.replace(/^mpdm-/, '').replace(/-\d+$/, '');
+    const parts = inner.split('--').filter(Boolean);
+    return parts.length ? parts.join(', ') : name;
   }
 
   protected async fillMembers(channelId: string): Promise<void> {
@@ -623,9 +1004,126 @@ export class SlackConnection implements Connection {
     const res = await this.web.conversations.history({ channel: channelId, limit: BACKFILL_LIMIT });
     const messages = (res.messages || []) as SlackMessageShape[];
     // history returns newest-first; reverse so we persist oldest-first.
-    for (const msg of messages.slice().reverse()) {
-      await this.persistHistorical(channelId, target, msg);
+    const ordered = messages.slice().reverse();
+    for (const msg of ordered) await this.persistHistorical(channelId, target, msg);
+    // Seed the page-up cursor at the oldest message we mirrored.
+    const oldest = ordered.find((m) => m.ts)?.ts;
+    if (oldest) this.oldestTs.set(target, oldest);
+  }
+
+  // Page-up: fetch the next older batch from Slack (using our own ts cursor, not
+  // the client's id), persist it, and return the events so wsHub can prepend
+  // them. Returns hasMore=false when the conversation's start is reached.
+  async fetchOlder(
+    target: string,
+  ): Promise<{ events: Record<string, unknown>[]; hasMore: boolean }> {
+    if (!this.web) return this.fetchOlderDemo(target);
+    const channelId = this.targetToId.get(target.toLowerCase());
+    const latest = this.oldestTs.get(target);
+    if (!channelId || !latest) return { events: [], hasMore: false };
+    let res;
+    try {
+      res = await this.web.conversations.history({
+        channel: channelId,
+        latest,
+        inclusive: false,
+        limit: BACKFILL_LIMIT,
+      });
+    } catch {
+      return { events: [], hasMore: false };
     }
+    const messages = ((res.messages || []) as SlackMessageShape[]).slice().reverse(); // oldest-first
+    const events: Record<string, unknown>[] = [];
+    for (const msg of messages) {
+      const built = await this.buildMessage(channelId, target, msg);
+      if (!built || !msg.ts) continue;
+      const { id } = insertMessage({
+        networkId: this.network.id,
+        target,
+        time: built.time,
+        type: 'message',
+        nick: built.nick,
+        text: built.text,
+        kind: 'privmsg',
+        self: built.self,
+        extra: {
+          slackTs: msg.ts,
+          ...(msg.thread_ts ? { threadRoot: msg.thread_ts } : {}),
+          ...(built.reactions.length ? { reactions: built.reactions } : {}),
+          ...(built.files.length ? { files: built.files } : {}),
+        },
+        matchedRuleId: null,
+        userhost: null,
+        fromIgnored: false,
+      });
+      events.push({
+        id: typeof id === 'bigint' ? Number(id) : id,
+        networkId: this.network.id,
+        target,
+        time: built.time,
+        type: 'message',
+        nick: built.nick,
+        text: built.text,
+        kind: 'privmsg',
+        self: built.self,
+        slackTs: msg.ts,
+        ...(msg.thread_ts ? { threadRoot: msg.thread_ts } : {}),
+        ...(built.reactions.length ? { reactions: built.reactions } : {}),
+        ...(built.files.length ? { files: built.files } : {}),
+      });
+    }
+    const newOldest = messages.find((m) => m.ts)?.ts;
+    if (newOldest) this.oldestTs.set(target, newOldest);
+    return { events, hasMore: !!res.has_more };
+  }
+
+  // Demo page-up: synthesize a few pages of older messages so scroll-up is
+  // exercisable without a real workspace. Stops after 3 pages.
+  protected fetchOlderDemo(target: string): {
+    events: Record<string, unknown>[];
+    hasMore: boolean;
+  } {
+    if (!this.targetToId.has(target.toLowerCase())) return { events: [], hasMore: false };
+    const page = this.demoOlderPages.get(target) || 0;
+    if (page >= 3) return { events: [], hasMore: false };
+    const base = Date.now() - 70_000 - page * 80_000;
+    const events: Record<string, unknown>[] = [];
+    for (let i = 0; i < 8; i++) {
+      const ms = base - i * 8_000;
+      const time = new Date(ms).toISOString();
+      const nick = ['Alice', 'Bob', 'me'][i % 3];
+      const text = `older demo message (page ${page + 1}, #${i + 1})`;
+      const ts = `demo-old-${page}-${i}`;
+      const { id } = insertMessage({
+        networkId: this.network.id,
+        target,
+        time,
+        type: 'message',
+        nick,
+        text,
+        kind: 'privmsg',
+        self: nick === 'me',
+        extra: { demo: true, slackTs: ts },
+        matchedRuleId: null,
+        userhost: null,
+        fromIgnored: false,
+      });
+      events.push({
+        id: typeof id === 'bigint' ? Number(id) : id,
+        networkId: this.network.id,
+        target,
+        time,
+        type: 'message',
+        nick,
+        text,
+        kind: 'privmsg',
+        self: nick === 'me',
+        slackTs: ts,
+      });
+    }
+    events.reverse(); // oldest-first for the prepend
+    this.demoOlderPages.set(target, page + 1);
+    return { events, hasMore: page + 1 < 3 };
   }
 
   // Backfill path: write straight to the DB (no live fan-out) so the messages
@@ -653,6 +1151,7 @@ export class SlackConnection implements Connection {
         slackTs: msg.ts,
         ...(msg.thread_ts ? { threadRoot: msg.thread_ts } : {}),
         ...(built.reactions.length ? { reactions: built.reactions } : {}),
+        ...(built.files.length ? { files: built.files } : {}),
       },
       matchedRuleId: null,
       userhost: null,
@@ -666,6 +1165,20 @@ export class SlackConnection implements Connection {
     if (!channelId) return;
     const target = this.idToTarget.get(channelId);
     if (!target) return; // a conversation opened after connect — handled later
+    // Edits/deletes update an existing row in place (by slackTs), not a new row.
+    if (msg.subtype === 'message_changed' && msg.message?.ts) {
+      this.publishEphemeral({
+        type: 'edit',
+        target,
+        slackTs: msg.message.ts,
+        text: `${this.formatText(msg.message.text || '')} (edited)`,
+      });
+      return;
+    }
+    if (msg.subtype === 'message_deleted' && msg.deleted_ts) {
+      this.publishEphemeral({ type: 'delete', target, slackTs: msg.deleted_ts });
+      return;
+    }
     // If this is a reply in an open thread, mirror it into that thread buffer so
     // the thread pane updates live (independently of the in-channel ↳ copy).
     if (msg.thread_ts) {
@@ -686,10 +1199,12 @@ export class SlackConnection implements Connection {
       slackTs: msg.ts,
       threadRoot: msg.thread_ts,
       reactions: built.reactions,
+      files: built.files,
       extra: {
         slackTs: msg.ts,
         ...(msg.thread_ts ? { threadRoot: msg.thread_ts } : {}),
         ...(built.reactions.length ? { reactions: built.reactions } : {}),
+        ...(built.files.length ? { files: built.files } : {}),
       },
     });
   }
@@ -760,6 +1275,20 @@ export class SlackConnection implements Connection {
     });
   }
 
+  // ── Read state ────────────────────────────────────────────────────────────
+
+  // Sync Lurker's read pointer back to Slack so the workspace stops showing the
+  // conversation as unread. messageId is the Lurker row the user read up to; we
+  // resolve its slackTs and call conversations.mark.
+  markRead(target: string, messageId: number): void {
+    const channel = this.targetToId.get(target.toLowerCase());
+    if (!channel || !this.web) return;
+    const extra = getMessageExtra(this.network.id, target, messageId);
+    const ts = extra?.slackTs;
+    if (typeof ts !== 'string') return;
+    void this.web.conversations.mark({ channel, ts }).catch(() => {});
+  }
+
   // ── Threads ───────────────────────────────────────────────────────────────
 
   // Open a thread as its own buffer beside the channel. Fetches the parent +
@@ -828,7 +1357,11 @@ export class SlackConnection implements Connection {
       text: built.text,
       kind: 'privmsg',
       self: built.self,
-      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
+      extra: {
+        slackTs: msg.ts,
+        ...(built.reactions.length ? { reactions: built.reactions } : {}),
+        ...(built.files.length ? { files: built.files } : {}),
+      },
       matchedRuleId: null,
       userhost: null,
       fromIgnored: false,
@@ -857,7 +1390,12 @@ export class SlackConnection implements Connection {
       time: built.time,
       slackTs: msg.ts,
       reactions: built.reactions,
-      extra: { slackTs: msg.ts, ...(built.reactions.length ? { reactions: built.reactions } : {}) },
+      files: built.files,
+      extra: {
+        slackTs: msg.ts,
+        ...(built.reactions.length ? { reactions: built.reactions } : {}),
+        ...(built.files.length ? { files: built.files } : {}),
+      },
     });
   }
 
@@ -896,7 +1434,10 @@ export class SlackConnection implements Connection {
     } else {
       nick = msg.username || 'unknown';
     }
-    let text = this.formatText(msg.text || '');
+    // App/bot posts often carry no top-level `text`, only Block Kit. Fall back
+    // to walking the blocks into Slack mrkdwn markers, which formatText then
+    // resolves (mentions/links/emoji) exactly like a normal message.
+    let text = this.formatText(msg.text || this.textFromBlocks(msg.blocks));
     // In the channel, a thread reply gets a ↳ marker so a flat buffer still
     // reads as a conversation; inside the thread buffer the marker is redundant.
     if (!inThread && msg.thread_ts && msg.thread_ts !== msg.ts) text = `↳ ${text}`;
@@ -911,13 +1452,47 @@ export class SlackConnection implements Connection {
       for (const r of reactions) tally.set(r.name, r.count);
       this.reactionTallies.set(`${channelId}:${msg.ts}`, tally);
     }
+    // Attachments: remember each file's auth-gated url so the proxy route can
+    // stream it, and hand the client a same-origin URL + image flag.
+    const files: FileChip[] = [];
+    for (const f of msg.files || []) {
+      if (!f.id) continue;
+      const url = f.url_private_download || f.url_private;
+      if (!url) continue;
+      const mimetype = f.mimetype || 'application/octet-stream';
+      const name = f.name || f.title || f.id;
+      this.files.set(f.id, { url, mimetype, name });
+      files.push({
+        name,
+        url: `/api/networks/${this.network.id}/slack-file/${f.id}`,
+        image: mimetype.startsWith('image/'),
+      });
+    }
     return {
       nick,
       text,
       self: !!msg.user && msg.user === this.selfId,
       time: msg.ts ? tsToIso(msg.ts) : new Date().toISOString(),
       reactions,
+      files,
     };
+  }
+
+  // Download a file's bytes from Slack with the bot token (called by the proxy
+  // route). Returns null for an unknown id or a failed fetch.
+  async downloadFile(
+    fileId: string,
+  ): Promise<{ data: ArrayBuffer; mimetype: string; name: string } | null> {
+    const meta = this.files.get(fileId);
+    const token = this.network.slack_bot_token;
+    if (!meta || !token || token === 'demo') return null;
+    try {
+      const res = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return null;
+      return { data: await res.arrayBuffer(), mimetype: meta.mimetype, name: meta.name };
+    } catch {
+      return null;
+    }
   }
 
   // Resolve Slack message markup into the plain conventions Lurker's client
@@ -960,6 +1535,38 @@ export class SlackConnection implements Connection {
       return inner;
     });
     return replaced.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  }
+
+  // Flatten a Block Kit `blocks` array into Slack mrkdwn-marker text (the same
+  // `<@id>` / `<#id>` / `<url|label>` / `:emoji:` forms formatText resolves), so
+  // app/bot messages that ship only blocks render instead of going blank. Covers
+  // the common blocks — section, header, context, and rich_text (incl. lists,
+  // quotes, and preformatted) — and ignores purely visual ones (image, divider,
+  // actions).
+  protected textFromBlocks(blocks: unknown): string {
+    if (!Array.isArray(blocks)) return '';
+    const lines: string[] = [];
+    for (const raw of blocks) {
+      const block = asRecord(raw);
+      if (!block) continue;
+      const type = block.type;
+      if (type === 'section' || type === 'header') {
+        const t = textObject(block.text);
+        if (t) lines.push(t);
+        for (const f of asArray(block.fields)) {
+          const ft = textObject(f);
+          if (ft) lines.push(ft);
+        }
+      } else if (type === 'context') {
+        const parts = asArray(block.elements)
+          .map((e) => textObject(e))
+          .filter(Boolean);
+        if (parts.length) lines.push(parts.join(' '));
+      } else if (type === 'rich_text') {
+        for (const el of asArray(block.elements)) lines.push(richElement(el));
+      }
+    }
+    return lines.filter((l) => l.trim()).join('\n');
   }
 
   protected onTyping(event: { channel?: string; user?: string } | undefined): void {

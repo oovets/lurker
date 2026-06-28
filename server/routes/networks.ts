@@ -198,6 +198,39 @@ router.post('/:id/reconnect', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// Same-origin proxy for Slack file attachments: Slack's url_private needs the
+// bot token, which the browser doesn't have — so the server fetches it and
+// streams it back (authenticated by the session like every other route).
+router.get('/:id/slack-file/:fileId', async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const conn = ircManager.getConnection(req.user!.id, id);
+  if (conn?.provider !== 'slack') {
+    res.status(404).end();
+    return;
+  }
+  const file = await conn.downloadFile(String(req.params.fileId));
+  if (!file) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader('Content-Type', file.mimetype);
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.send(Buffer.from(file.data));
+});
+
+// The workspace's custom emoji (name → image URL) for a Slack network, so the
+// client can offer them in `:shortcode:` autocomplete and render them in
+// message bodies + reaction chips. Empty object for non-Slack networks.
+router.get('/:id/slack-emoji', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const conn = ircManager.getConnection(req.user!.id, id);
+  if (conn?.provider !== 'slack') {
+    res.json({ emoji: {} });
+    return;
+  }
+  res.json({ emoji: conn.emojiMap() });
+});
+
 router.post('/:id/join', (req: Request, res: Response) => {
   const id = Number(req.params.id);
   const { channel } = req.body || {};

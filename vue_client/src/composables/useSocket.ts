@@ -149,6 +149,12 @@ function applyEvent(event: any): void {
       // not a new row, so it doesn't go through pushMessage.
       buffers.applyReaction(event.networkId, event.target, event.slackTs, event.reactions);
       break;
+    case 'edit':
+      buffers.applyEdit(event.networkId, event.target, event.slackTs, event.text);
+      break;
+    case 'delete':
+      buffers.applyDelete(event.networkId, event.target, event.slackTs);
+      break;
     case 'topic':
       if (!buffers.pushMessage(event)) break;
       buffers.setTopic(event.networkId, event.target, event.text);

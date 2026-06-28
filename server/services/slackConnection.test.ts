@@ -18,6 +18,9 @@ const h = vi.hoisted(() => {
   const handlers: Record<string, (a: unknown) => unknown> = {};
   const posts: Array<{ channel: string; text: string; thread_ts?: string }> = [];
   const reacts: Array<{ channel: string; timestamp: string; name: string; op: string }> = [];
+  const marks: Array<{ channel: string; ts: string }> = [];
+  const joins: string[] = [];
+  const leaves: string[] = [];
   const web = {
     auth: { test: async () => ({ user_id: 'U_SELF', user: 'me' }) },
     users: {
@@ -36,22 +39,65 @@ const h = vi.hoisted(() => {
         response_metadata: {},
       }),
       info: async ({ user }: { user: string }) => ({ user: { id: user, name: user } }),
+      getPresence: async () => ({ presence: 'away' }),
     },
     bots: {
       info: async ({ bot }: { bot: string }) => ({ bot: { id: bot, name: 'AlertBot' } }),
     },
+    emoji: {
+      // A custom emoji, an alias to it, a dangling alias, and a non-URL value —
+      // exercises alias resolution + filtering. Overridden per-test as needed.
+      list: async () => ({
+        emoji: {
+          party_parrot: 'https://emoji.example/parrot.gif',
+          partyparrot: 'alias:party_parrot',
+          dangling: 'alias:nope',
+          weird: 'not-a-url',
+        },
+      }),
+    },
     conversations: {
       members: async () => ({ members: ['U1', 'U_SELF'] }),
-      history: async ({ channel }: { channel: string }) =>
-        channel === 'C1'
-          ? { messages: [{ ts: '1700000000.000100', user: 'U1', text: 'hello world' }] }
-          : { messages: [] },
+      history: async ({ channel, latest }: { channel: string; latest?: string }) => {
+        if (channel !== 'C1') return { messages: [] };
+        // Initial backfill (no `latest`): one recent message. Page-up (`latest`
+        // set): one older message, then exhausted.
+        if (!latest)
+          return { messages: [{ ts: '1700000000.000100', user: 'U1', text: 'hello world' }] };
+        if (latest === '1700000000.000100')
+          return {
+            messages: [{ ts: '1699999999.000000', user: 'U1', text: 'older one' }],
+            has_more: false,
+          };
+        return { messages: [] };
+      },
       replies: async ({ ts }: { channel: string; ts: string }) => ({
         messages: [
           { ts, user: 'U1', text: 'thread parent' },
           { ts: `${ts}-r`, user: 'U_SELF', text: 'a reply', thread_ts: ts },
         ],
       }),
+      mark: async ({ channel, ts }: { channel: string; ts: string }) => {
+        marks.push({ channel, ts });
+        return { ok: true };
+      },
+      // Channel directory for join() name→id resolution; overridden per-test.
+      list: async () => ({
+        channels: [{ id: 'C9', name: 'random' }],
+        response_metadata: {},
+      }),
+      join: async ({ channel }: { channel: string }) => {
+        joins.push(channel);
+        return { ok: true };
+      },
+      leave: async ({ channel }: { channel: string }) => {
+        leaves.push(channel);
+        return { ok: true };
+      },
+    },
+    search: {
+      // Overridden per-test; default returns no matches.
+      messages: async () => ({ messages: { matches: [], paging: { page: 1, pages: 1 } } }),
     },
     chat: {
       postMessage: async (args: { channel: string; text: string; thread_ts?: string }) => {
@@ -77,7 +123,7 @@ const h = vi.hoisted(() => {
     start: async () => {},
     disconnect: async () => {},
   };
-  return { web, socket, handlers, posts, reacts };
+  return { web, socket, handlers, posts, reacts, marks, joins, leaves };
 });
 
 vi.mock('@slack/web-api', () => ({
@@ -113,6 +159,7 @@ interface AnyEvent {
   kind?: string;
   slackTs?: string;
   reactions?: Array<{ name: string; count: number }>;
+  files?: Array<{ name: string; url: string; image: boolean }>;
 }
 
 beforeAll(async () => {
@@ -185,6 +232,145 @@ describe('SlackConnection', () => {
     });
   });
 
+  it('probes DM peer presence on demand', async () => {
+    const user = createUser('presence');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    events.length = 0;
+    conn.probePresence('Alice');
+    await Promise.resolve();
+    await Promise.resolve();
+    const pres = events.find((e) => e.type === 'peer-presence');
+    expect(pres?.nick).toBe('Alice');
+    expect(pres?.state).toBe('away'); // mock getPresence returns 'away'
+  });
+
+  it('emits live edit + delete events by slackTs', async () => {
+    const user = createUser('editor');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+    const onMessage = h.handlers['message'];
+
+    events.length = 0;
+    await onMessage({
+      event: {
+        channel: 'C1',
+        subtype: 'message_changed',
+        message: { ts: '1700000000.009000', text: 'fixed typo' },
+      },
+      ack: async () => {},
+    });
+    expect(events.find((e) => e.type === 'edit')).toMatchObject({
+      target: '#general',
+      slackTs: '1700000000.009000',
+      text: 'fixed typo (edited)',
+    });
+
+    events.length = 0;
+    await onMessage({
+      event: { channel: 'C1', subtype: 'message_deleted', deleted_ts: '1700000000.009000' },
+      ack: async () => {},
+    });
+    expect(events.find((e) => e.type === 'delete')).toMatchObject({
+      target: '#general',
+      slackTs: '1700000000.009000',
+    });
+  });
+
+  it('exposes file attachments as same-origin proxy URLs', async () => {
+    const user = createUser('filer');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    events.length = 0;
+    await h.handlers['message']({
+      event: {
+        channel: 'C1',
+        ts: '1700000000.008000',
+        user: 'U1',
+        text: 'see this',
+        files: [
+          { id: 'F1', name: 'pic.png', mimetype: 'image/png', url_private: 'https://x/pic.png' },
+          {
+            id: 'F2',
+            name: 'doc.pdf',
+            mimetype: 'application/pdf',
+            url_private: 'https://x/doc.pdf',
+          },
+        ],
+      },
+      ack: async () => {},
+    });
+    const ev = events.find((e) => e.type === 'message');
+    expect(ev?.files).toEqual([
+      { name: 'pic.png', url: `/api/networks/${net!.id}/slack-file/F1`, image: true },
+      { name: 'doc.pdf', url: `/api/networks/${net!.id}/slack-file/F2`, image: false },
+    ]);
+  });
+
+  it('pages older history on demand (fetchOlder)', async () => {
+    const user = createUser('pager');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const conn = new SlackConnection({ network: net!, onEvent: () => {} });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    const older = await (
+      conn as unknown as {
+        fetchOlder(t: string): Promise<{ events: Array<{ text: string }>; hasMore: boolean }>;
+      }
+    ).fetchOlder('#general');
+    expect(older.events.map((e) => e.text)).toEqual(['older one']);
+    expect(older.hasMore).toBe(false);
+  });
+
   it('encodes @name mentions into <@id> so Slack notifies', async () => {
     const user = createUser('mentioner');
     const net = createNetwork(user.id, {
@@ -200,9 +386,9 @@ describe('SlackConnection', () => {
     await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
 
     h.posts.length = 0;
-    conn.say('#general', 'hey @alice and @Alice, ping?');
+    conn.say('#general', 'hey @alice and @Alice, see #general (not #nope)');
     await Promise.resolve();
-    expect(h.posts[0]?.text).toBe('hey <@U1> and <@U1>, ping?');
+    expect(h.posts[0]?.text).toBe('hey <@U1> and <@U1>, see <#C1|general> (not #nope)');
   });
 
   it('names app/bot messages instead of showing "unknown"', async () => {
@@ -390,6 +576,29 @@ describe('SlackConnection', () => {
     expect(mirrored.map((e) => e.text)).toEqual(['live reply']);
   });
 
+  it('syncs read state back to Slack (conversations.mark)', async () => {
+    const user = createUser('reader');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const conn = new SlackConnection({ network: net!, onEvent: () => {} });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    const row = db
+      .prepare("SELECT id FROM messages WHERE network_id = ? AND target = '#general'")
+      .get(net!.id) as { id: number };
+    h.marks.length = 0;
+    conn.markRead('#general', row.id);
+    await Promise.resolve();
+    expect(h.marks).toContainEqual({ channel: 'C1', ts: '1700000000.000100' });
+  });
+
   it('click-to-react calls reactions.add/remove', async () => {
     const user = createUser('clicker');
     const net = createNetwork(user.id, {
@@ -438,13 +647,13 @@ describe('SlackConnection', () => {
     const snap = conn.snapshot() as unknown as { channels: SnapChannel[] };
     expect(snap.channels.map((c) => c.name).sort()).toEqual(['#general', '#random']);
 
-    // The canned history was mirrored for this network (8 backfilled lines).
+    // The canned history was mirrored for this network (12 backfilled lines).
     const count = (
       db.prepare('SELECT COUNT(*) AS n FROM messages WHERE network_id = ?').get(net!.id) as {
         n: number;
       }
     ).n;
-    expect(count).toBe(8);
+    expect(count).toBe(12);
 
     // Markup in the canned lines is resolved to readable text.
     const ping = db
@@ -462,5 +671,134 @@ describe('SlackConnection', () => {
 
     conn.dispose();
     vi.useRealTimers();
+  });
+
+  // Shared boilerplate: a fresh user + Slack network + connected adapter.
+  async function connectFresh(label: string) {
+    const user = createUser(label);
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+    return { net: net!, conn, events };
+  }
+
+  it('renders a blocks-only (Block Kit) message when it carries no text', async () => {
+    const { events } = await connectFresh('blockkit');
+    events.length = 0;
+    await h.handlers['message']({
+      event: {
+        channel: 'C1',
+        ts: '1700000000.000910',
+        user: 'U1',
+        // No `text` — only Block Kit rich_text, as app/bot posts often send.
+        blocks: [
+          {
+            type: 'rich_text',
+            elements: [
+              {
+                type: 'rich_text_section',
+                elements: [
+                  { type: 'text', text: 'hi ' },
+                  { type: 'user', user_id: 'U1' },
+                  { type: 'text', text: ' see ' },
+                  { type: 'link', url: 'https://x.io', text: 'here' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      ack: async () => {},
+    });
+    const live = events.find((e) => e.type === 'message');
+    expect(live?.text).toBe('hi @Alice see here (https://x.io)');
+  });
+
+  it('names a group DM (mpim) by its participants', async () => {
+    const origConv = h.web.users.conversations;
+    const origHist = h.web.conversations.history;
+    h.web.users.conversations = (async () => ({
+      channels: [{ id: 'G1', name: 'mpdm-alice--bob-1', is_im: false, is_mpim: true }],
+      response_metadata: {},
+    })) as unknown as typeof h.web.users.conversations;
+    h.web.conversations.history = async ({ channel }: { channel: string }) =>
+      channel === 'G1'
+        ? { messages: [{ ts: '1700000000.000500', user: 'U1', text: 'group hi' }] }
+        : { messages: [] };
+    try {
+      const { net } = await connectFresh('mpim');
+      const rows = db.prepare('SELECT target, text FROM messages WHERE network_id = ?').all(net.id);
+      expect(rows).toContainEqual({ target: 'alice, bob', text: 'group hi' });
+    } finally {
+      h.web.users.conversations = origConv;
+      h.web.conversations.history = origHist;
+    }
+  });
+
+  it('joins a channel the bot is not in yet (resolves id, joins, backfills, re-snapshots)', async () => {
+    const { conn, events } = await connectFresh('joiner');
+    h.joins.length = 0;
+    events.length = 0;
+    await (conn as unknown as { joinAsync(c: string): Promise<void> }).joinAsync('#random');
+    // Resolved 'random' → C9 via conversations.list, then conversations.join(C9).
+    expect(h.joins).toContain('C9');
+    const snap = conn.snapshot() as unknown as { channels: SnapChannel[] };
+    expect(snap.channels.find((c) => c.name === '#random')).toBeDefined();
+    // A fresh 'connected' snapshot surfaces the new buffer to open sockets.
+    expect(events.some((e) => e.type === 'state' && e.state === 'connected')).toBe(true);
+  });
+
+  it('loads workspace-custom emoji and resolves alias chains', async () => {
+    const { conn } = await connectFresh('emoji');
+    const map = (conn as unknown as { emojiMap(): Record<string, string> }).emojiMap();
+    // Direct URL + an alias resolved to it; dangling alias + non-URL dropped.
+    expect(map.party_parrot).toBe('https://emoji.example/parrot.gif');
+    expect(map.partyparrot).toBe('https://emoji.example/parrot.gif');
+    expect(map.dangling).toBeUndefined();
+    expect(map.weird).toBeUndefined();
+  });
+
+  it('searches the whole workspace via search.messages', async () => {
+    const { conn, net } = await connectFresh('searcher');
+    const origSearch = h.web.search.messages;
+    h.web.search.messages = (async () => ({
+      messages: {
+        matches: [
+          {
+            ts: '1700000000.000700',
+            user: 'U1',
+            text: 'found it',
+            channel: { id: 'C1', name: 'general' },
+          },
+        ],
+        paging: { page: 1, pages: 1 },
+      },
+    })) as typeof h.web.search.messages;
+    try {
+      const res = await conn.search('found');
+      expect(res.messages).toHaveLength(1);
+      expect(res.messages[0]).toMatchObject({
+        networkId: net.id,
+        target: '#general',
+        nick: 'Alice',
+        text: 'found it',
+      });
+      // Synthetic negative id keeps result keys unique + opens the channel on jump.
+      expect((res.messages[0] as { id: number }).id).toBeLessThan(0);
+    } finally {
+      h.web.search.messages = origSearch;
+    }
   });
 });

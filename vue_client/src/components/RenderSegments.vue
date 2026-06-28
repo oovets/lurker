@@ -49,6 +49,15 @@
       @contextmenu.stop.prevent="$emit('nickClick', seg.text, $event)"
       >{{ seg.text }}</span
     >
+    <!-- A Slack workspace-custom emoji: inline image with the `:name:` as alt /
+         title so it stays readable and copy-pasteable. -->
+    <img
+      v-else-if="seg.emojiUrl"
+      class="custom-emoji"
+      :src="seg.emojiUrl"
+      :alt="seg.text"
+      :title="seg.text"
+    />
     <span v-else-if="hasStyle(seg)" :style="styleFor(seg)">{{ seg.text }}</span>
     <template v-else>{{ seg.text }}</template>
   </template>
@@ -146,3 +155,13 @@ function openChannel(channel: string): void {
   socketSend({ type: 'open-buffer', networkId: nid, target: channel });
 }
 </script>
+
+<style scoped>
+/* Inline custom emoji: line-height sized so it sits with the text run. */
+.custom-emoji {
+  height: 1.35em;
+  width: auto;
+  vertical-align: -0.3em;
+  margin: 0 1px;
+}
+</style>
