@@ -17,6 +17,7 @@ process.env.DATABASE_PATH = path.join(tmpDir, 'test.db');
 const h = vi.hoisted(() => {
   const handlers: Record<string, (a: unknown) => unknown> = {};
   const posts: Array<{ channel: string; text: string }> = [];
+  const reacts: Array<{ channel: string; timestamp: string; name: string; op: string }> = [];
   const web = {
     auth: { test: async () => ({ user_id: 'U_SELF', user: 'me' }) },
     users: {
@@ -36,6 +37,9 @@ const h = vi.hoisted(() => {
       }),
       info: async ({ user }: { user: string }) => ({ user: { id: user, name: user } }),
     },
+    bots: {
+      info: async ({ bot }: { bot: string }) => ({ bot: { id: bot, name: 'AlertBot' } }),
+    },
     conversations: {
       members: async () => ({ members: ['U1', 'U_SELF'] }),
       history: async ({ channel }: { channel: string }) =>
@@ -49,6 +53,16 @@ const h = vi.hoisted(() => {
         return { ok: true, ts: '1700000000.000300' };
       },
     },
+    reactions: {
+      add: async (args: { channel: string; timestamp: string; name: string }) => {
+        reacts.push({ ...args, op: 'add' });
+        return { ok: true };
+      },
+      remove: async (args: { channel: string; timestamp: string; name: string }) => {
+        reacts.push({ ...args, op: 'remove' });
+        return { ok: true };
+      },
+    },
   };
   const socket = {
     on: (type: string, fn: (a: unknown) => unknown) => {
@@ -57,7 +71,7 @@ const h = vi.hoisted(() => {
     start: async () => {},
     disconnect: async () => {},
   };
-  return { web, socket, handlers, posts };
+  return { web, socket, handlers, posts, reacts };
 });
 
 vi.mock('@slack/web-api', () => ({
@@ -165,6 +179,48 @@ describe('SlackConnection', () => {
     });
   });
 
+  it('names app/bot messages instead of showing "unknown"', async () => {
+    const user = createUser('bots');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const events: AnyEvent[] = [];
+    const conn = new SlackConnection({
+      network: net!,
+      onEvent: (e) => events.push(e as unknown as AnyEvent),
+    });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+    const onMessage = h.handlers['message'];
+
+    // Inline bot_profile name wins.
+    events.length = 0;
+    await onMessage({
+      event: {
+        channel: 'C1',
+        ts: '1700000000.003000',
+        bot_id: 'B1',
+        bot_profile: { name: 'Datadog' },
+        text: 'ALERT',
+      },
+      ack: async () => {},
+    });
+    expect(events.find((e) => e.type === 'message')?.nick).toBe('Datadog');
+
+    // No bot_profile → resolved via bots.info (mock returns AlertBot).
+    events.length = 0;
+    await onMessage({
+      event: { channel: 'C1', ts: '1700000000.003001', bot_id: 'B2', text: 'ALERT' },
+      ack: async () => {},
+    });
+    expect(events.find((e) => e.type === 'message')?.nick).toBe('AlertBot');
+  });
+
   it('resolves Slack markup into Lurker-friendly text', async () => {
     const user = createUser('fmt');
     const net = createNetwork(user.id, {
@@ -251,8 +307,33 @@ describe('SlackConnection', () => {
     expect(rx?.target).toBe('#general');
     expect(rx?.slackTs).toBe('1700000000.002000');
     expect(rx?.reactions).toEqual([
-      { name: 'tada', count: 4 },
-      { name: '+1', count: 2 },
+      { name: 'tada', count: 4, mine: false },
+      { name: '+1', count: 2, mine: false },
+    ]);
+  });
+
+  it('click-to-react calls reactions.add/remove', async () => {
+    const user = createUser('clicker');
+    const net = createNetwork(user.id, {
+      name: 'Slack',
+      host: 'slack',
+      port: 443,
+      nick: 'me',
+      provider: 'slack',
+      slack_bot_token: 'xoxb-test',
+      slack_app_token: 'xapp-test',
+    });
+    const conn = new SlackConnection({ network: net!, onEvent: () => {} });
+    await (conn as unknown as { connectAsync(): Promise<void> }).connectAsync();
+
+    h.reacts.length = 0;
+    conn.react('#general', '1700000000.005000', 'tada', true);
+    conn.react('#general', '1700000000.005000', 'tada', false);
+    // resolve the queued (async) Slack calls
+    await Promise.resolve();
+    expect(h.reacts).toEqual([
+      { channel: 'C1', timestamp: '1700000000.005000', name: 'tada', op: 'add' },
+      { channel: 'C1', timestamp: '1700000000.005000', name: 'tada', op: 'remove' },
     ]);
   });
 

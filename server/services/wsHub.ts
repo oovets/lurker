@@ -1720,6 +1720,20 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
           msg.state as string,
         );
         break;
+      case 'react': {
+        // Slack click-to-react: add/remove the user's reaction. Provider-guarded
+        // so it narrows to SlackConnection (reactions are Slack-only).
+        const conn = ircManager.getConnection(userId, msg.networkId as number);
+        if (conn?.provider === 'slack') {
+          conn.react(
+            msg.target as string,
+            msg.slackTs as string,
+            msg.name as string,
+            msg.add !== false,
+          );
+        }
+        break;
+      }
       case 'mark-read': {
         const target = msg.target as string;
         const requested = Number(msg.messageId);

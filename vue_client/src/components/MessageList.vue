@@ -114,13 +114,17 @@
               @nick-click="onMentionMenu"
             />
             <span v-if="reactionsOf(row.m).length" class="reactions">
-              <span
+              <button
                 v-for="r in reactionsOf(row.m)"
                 :key="r.name"
+                type="button"
                 class="reaction-chip"
+                :class="{ mine: r.mine }"
                 :title="`:${r.name}:`"
-                >{{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}</span
+                @click.stop="toggleReaction(row.m, r)"
               >
+                {{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}
+              </button>
             </span>
           </span>
           <span class="time">{{ row.continuationTime ? '' : time(row.m?.time) }}</span>
@@ -240,13 +244,17 @@
               ><LinkedText :text="row.m.text ?? ''"
             /></template>
             <span v-if="reactionsOf(row.m).length" class="reactions">
-              <span
+              <button
                 v-for="r in reactionsOf(row.m)"
                 :key="r.name"
+                type="button"
                 class="reaction-chip"
+                :class="{ mine: r.mine }"
                 :title="`:${r.name}:`"
-                >{{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}</span
+                @click.stop="toggleReaction(row.m, r)"
               >
+                {{ reactionGlyph(r.name) }}&nbsp;{{ r.count }}
+              </button>
             </span>
           </span>
         </template>
@@ -1170,11 +1178,26 @@ function bodyClass(m: ChatMessage | undefined) {
 // Emoji reaction chips (Slack). reactions ride on the message (from backlog +
 // live 'reaction' events); glyph falls back to the :shortcode: when the emoji
 // data hasn't loaded or the name is a custom workspace emoji.
-function reactionsOf(m: ChatMessage | undefined): Array<{ name: string; count: number }> {
-  return (m as { reactions?: Array<{ name: string; count: number }> } | undefined)?.reactions ?? [];
+type ReactionChip = { name: string; count: number; mine?: boolean };
+function reactionsOf(m: ChatMessage | undefined): ReactionChip[] {
+  return (m as { reactions?: ReactionChip[] } | undefined)?.reactions ?? [];
 }
 function reactionGlyph(name: string): string {
   return emojiGlyph(name) || `:${name}:`;
+}
+// Click-to-react: toggle the user's reaction. The server's reactions.add/remove
+// round-trip echoes a `reaction` event back that updates the chips.
+function toggleReaction(m: ChatMessage | undefined, r: ReactionChip): void {
+  const slackTs = (m as { slackTs?: string } | undefined)?.slackTs;
+  if (!m || !slackTs) return;
+  socketSend({
+    type: 'react',
+    networkId: m.networkId,
+    target: m.target,
+    slackTs,
+    name: r.name,
+    add: !r.mine,
+  });
 }
 
 // True for any line type whose body is just `m.text` and should be split
@@ -1944,7 +1967,18 @@ watch(
   color: var(--fg-muted);
   background: var(--bg-soft);
   white-space: nowrap;
+  font: inherit;
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.reaction-chip:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+/* The user's own reaction reads as active. */
+.reaction-chip.mine {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 /* .msg-link styling lives in src/assets/main.css (shared with the topic bar). */
 

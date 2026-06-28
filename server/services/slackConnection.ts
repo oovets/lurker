@@ -51,13 +51,17 @@ interface SlackMessageShape {
   thread_ts?: string;
   bot_id?: string;
   username?: string;
+  bot_profile?: { name?: string };
   reactions?: Array<{ name?: string; count?: number }>;
 }
 
-// One emoji reaction on a message — rendered as a chip by the client.
+// One emoji reaction on a message — rendered as a chip by the client. `mine`
+// marks the authenticated user's own reaction so the chip can highlight and a
+// click can toggle it off.
 interface ReactionChip {
   name: string;
   count: number;
+  mine?: boolean;
 }
 
 // Run an async fn over items with bounded concurrency — cuts cold-start time
@@ -94,6 +98,8 @@ export class SlackConnection implements Connection {
   protected idToTarget = new Map<string, string>();
   // User id → display name cache (users.list seed + users.info fallback).
   protected userNames = new Map<string, string>();
+  // Bot id → name cache (bots.info), for app/bot messages that carry no user.
+  protected botNames = new Map<string, string>();
   // De-dup key `${channelId}:${ts}` so a message present in both the history
   // backfill and the live socket stream is only persisted once.
   protected seenTs = new Set<string>();
@@ -101,6 +107,9 @@ export class SlackConnection implements Connection {
   // from history and updated by live reaction_added/removed so we can push the
   // full set to the client on each change.
   protected reactionTallies = new Map<string, Map<string, number>>();
+  // Per-message set of reaction names the authenticated user has added, so chips
+  // can show a "mine" state and click toggles add/remove.
+  protected selfReactions = new Map<string, Set<string>>();
 
   protected web: WebClient | null = null;
   protected socket: SocketModeClient | null = null;
@@ -184,7 +193,7 @@ export class SlackConnection implements Connection {
     const onReaction =
       (delta: number) =>
       async (args: {
-        event?: { reaction?: string; item?: { channel?: string; ts?: string } };
+        event?: { reaction?: string; user?: string; item?: { channel?: string; ts?: string } };
         ack?: () => Promise<void>;
       }) => {
         try {
@@ -194,7 +203,7 @@ export class SlackConnection implements Connection {
         }
         const e = args.event;
         if (e?.reaction && e.item?.channel && e.item.ts) {
-          this.applyReactionDelta(e.item.channel, e.item.ts, e.reaction, delta);
+          this.applyReactionDelta(e.item.channel, e.item.ts, e.reaction, delta, e.user);
         }
       };
     this.socket.on('reaction_added', onReaction(+1));
@@ -462,6 +471,24 @@ export class SlackConnection implements Connection {
     }
   }
 
+  // App/bot messages carry a bot_id (and often no user). Prefer the inline
+  // bot_profile.name, fall back to bots.info, cached — so a monitoring app's
+  // alerts show its name instead of "unknown".
+  protected async resolveBotName(botId: string): Promise<string> {
+    const cached = this.botNames.get(botId);
+    if (cached) return cached;
+    if (!this.web) return botId;
+    try {
+      const res = await this.web.bots.info({ bot: botId });
+      const name = (res.bot?.name as string | undefined) || botId;
+      this.botNames.set(botId, name);
+      return name;
+    } catch {
+      this.botNames.set(botId, botId);
+      return botId;
+    }
+  }
+
   // Build channel + DM buffers from the user's conversations, populating the
   // target↔id maps and (for channels) the nicklist. Member lists are fetched in
   // parallel after the (fast) conversation list, rather than serially per
@@ -603,7 +630,16 @@ export class SlackConnection implements Connection {
 
   // ── Live reactions ────────────────────────────────────────────────────────
 
-  protected applyReactionDelta(channelId: string, ts: string, name: string, delta: number): void {
+  // Apply a +1/-1 from a Slack reaction_added/removed event. `user` lets us
+  // track whether the authenticated user is among the reactors, so the chip can
+  // render a "mine" state and toggle on click.
+  protected applyReactionDelta(
+    channelId: string,
+    ts: string,
+    name: string,
+    delta: number,
+    user?: string,
+  ): void {
     const key = `${channelId}:${ts}`;
     let tally = this.reactionTallies.get(key);
     if (!tally) {
@@ -612,6 +648,15 @@ export class SlackConnection implements Connection {
     }
     tally.set(name, Math.max(0, (tally.get(name) || 0) + delta));
     if ((tally.get(name) || 0) === 0) tally.delete(name);
+    if (user && user === this.selfId) {
+      let mine = this.selfReactions.get(key);
+      if (!mine) {
+        mine = new Set<string>();
+        this.selfReactions.set(key, mine);
+      }
+      if (delta > 0) mine.add(name);
+      else mine.delete(name);
+    }
     this.emitReactionUpdate(channelId, ts);
   }
 
@@ -620,11 +665,33 @@ export class SlackConnection implements Connection {
   protected emitReactionUpdate(channelId: string, ts: string): void {
     const target = this.idToTarget.get(channelId);
     if (!target) return;
-    const tally = this.reactionTallies.get(`${channelId}:${ts}`) || new Map<string, number>();
+    const key = `${channelId}:${ts}`;
+    const tally = this.reactionTallies.get(key) || new Map<string, number>();
+    const mine = this.selfReactions.get(key) || new Set<string>();
     const reactions: ReactionChip[] = Array.from(tally.entries())
       .filter(([, count]) => count > 0)
-      .map(([name, count]) => ({ name, count }));
+      .map(([name, count]) => ({ name, count, mine: mine.has(name) }));
     this.publishEphemeral({ type: 'reaction', target, slackTs: ts, reactions });
+  }
+
+  // Click-to-react from the client: add or remove the user's reaction. The
+  // resulting Slack reaction_added/removed event (which we also receive) updates
+  // the tally + chips, so there's no optimistic local bump to double-count.
+  react(target: string, slackTs: string, name: string, add: boolean): void {
+    const channel = this.targetToId.get(target.toLowerCase());
+    if (!channel || !slackTs || !name) return;
+    // Demo mode has no real workspace — apply the toggle locally so click-to-
+    // react is exercisable in the browser.
+    if (!this.web) {
+      this.applyReactionDelta(channel, slackTs, name, add ? +1 : -1, this.selfId);
+      return;
+    }
+    const call = add
+      ? this.web.reactions.add({ channel, timestamp: slackTs, name })
+      : this.web.reactions.remove({ channel, timestamp: slackTs, name });
+    void call.catch(() => {
+      /* already_reacted / no_reaction are benign races; ignore */
+    });
   }
 
   // Shared message mapping + de-dup. Returns null for messages we skip (edits,
@@ -646,9 +713,17 @@ export class SlackConnection implements Connection {
     const key = `${channelId}:${msg.ts}`;
     if (this.seenTs.has(key)) return null;
     this.seenTs.add(key);
-    const nick = msg.bot_id
-      ? msg.username || (await this.resolveUserName(msg.user)) || 'bot'
-      : await this.resolveUserName(msg.user);
+    // App/bot lines (bot_id, usually no user) name themselves via bot_profile /
+    // username / bots.info; real users via the user cache. Only a message with
+    // neither falls back to 'unknown'.
+    let nick: string;
+    if (msg.bot_id) {
+      nick = msg.bot_profile?.name || msg.username || (await this.resolveBotName(msg.bot_id));
+    } else if (msg.user) {
+      nick = await this.resolveUserName(msg.user);
+    } else {
+      nick = msg.username || 'unknown';
+    }
     let text = this.formatText(msg.text || '');
     // Thread replies (a thread_ts that isn't this message's own ts) flow inline
     // in the channel with a marker, so a flat IRC-style buffer still reads as a

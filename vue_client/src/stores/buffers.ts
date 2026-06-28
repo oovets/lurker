@@ -117,9 +117,10 @@ export interface BufferMessage {
   body?: string;
   createdAt?: string;
   // Slack provider extras (absent on IRC): the source message id used to target
-  // live reaction updates, and the current emoji reaction chips.
+  // live reaction updates, and the current emoji reaction chips (`mine` marks
+  // the user's own reaction).
   slackTs?: string;
-  reactions?: Array<{ name: string; count: number }>;
+  reactions?: Array<{ name: string; count: number; mine?: boolean }>;
   [key: string]: unknown;
 }
 
@@ -688,7 +689,7 @@ export const useBuffersStore = defineStore('buffers', {
       networkId: number | string,
       target: string,
       slackTs: string,
-      reactions: Array<{ name: string; count: number }>,
+      reactions: Array<{ name: string; count: number; mine?: boolean }>,
     ) {
       if (!slackTs) return;
       const buf = this.findByTarget(networkId, target);
