@@ -27,7 +27,9 @@ router.use(blockWritesWhenPaused);
 
 function networkPayload(network: Network | undefined | null): Record<string, unknown> | null {
   if (!network) return null;
-  const { server_password, sasl_password, ...safe } = network;
+  // Never ship secrets to the client — drop the IRC passwords and the Slack
+  // tokens, surfacing only booleans for "is one set".
+  const { server_password, sasl_password, slack_bot_token, slack_app_token, ...safe } = network;
   return {
     ...safe,
     tls: !!network.tls,
@@ -35,6 +37,7 @@ function networkPayload(network: Network | undefined | null): Record<string, unk
     autoconnect: !!network.autoconnect,
     has_password: !!server_password,
     has_sasl_password: !!sasl_password,
+    has_slack_tokens: !!(slack_bot_token && slack_app_token),
     channels: listChannels(network.id),
   };
 }
@@ -60,19 +63,30 @@ router.post('/', (req: Request, res: Response) => {
     sasl_password,
     default_channel,
     connect_commands,
+    provider,
+    slack_bot_token,
+    slack_app_token,
   } = req.body || {};
-  if (!name || !host || !nick) {
+  const isSlack = provider === 'slack';
+  // Slack rows need only a name + the two tokens; host/nick are placeholders the
+  // adapter ignores. IRC keeps its original required set.
+  if (isSlack) {
+    if (!name || !slack_bot_token || !slack_app_token) {
+      res.status(400).json({ error: 'name, slack_bot_token, and slack_app_token are required' });
+      return;
+    }
+  } else if (!name || !host || !nick) {
     res.status(400).json({ error: 'name, host, and nick are required' });
     return;
   }
 
   const network = createNetwork(req.user!.id, {
     name,
-    host,
+    host: isSlack ? 'slack' : host,
     port,
     tls,
     trusted_certificates,
-    nick,
+    nick: isSlack ? 'me' : nick,
     username,
     realname,
     server_password,
@@ -80,12 +94,17 @@ router.post('/', (req: Request, res: Response) => {
     sasl_account,
     sasl_password,
     connect_commands,
+    provider: isSlack ? 'slack' : 'irc',
+    slack_bot_token: isSlack ? slack_bot_token : null,
+    slack_app_token: isSlack ? slack_app_token : null,
   });
   if (!network) {
     res.status(500).json({ error: 'failed to create network' });
     return;
   }
-  const channel = (default_channel || '').trim();
+  // Slack conversations are discovered on connect, so there's no default channel
+  // to pre-create for a Slack network.
+  const channel = isSlack ? '' : (default_channel || '').trim();
   if (channel) upsertChannel(network.id, channel, true);
   // Creating a network is an explicit "Save & connect" action, so connect now
   // regardless of `autoconnect`. The `autoconnect` flag governs only whether a

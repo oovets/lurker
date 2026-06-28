@@ -18,120 +18,167 @@
         <button v-if="!isEdit" type="button" class="back-link" @click="step = 'pick'">
           ← {{ picked ? picked.name : 'pick a network' }}
         </button>
+        <div v-if="!isEdit" class="row provider-toggle">
+          <label class="check">
+            <input v-model="form.provider" type="radio" value="irc" />
+            <span>IRC</span>
+          </label>
+          <label class="check">
+            <input v-model="form.provider" type="radio" value="slack" />
+            <span>Slack</span>
+          </label>
+        </div>
         <label>
           <span>Name</span>
-          <input v-model="form.name" placeholder="Libera" required />
+          <input v-model="form.name" :placeholder="isSlack ? 'My Workspace' : 'Libera'" required />
         </label>
-        <div class="row">
-          <label class="grow">
-            <span>Host</span>
-            <input v-model="form.host" placeholder="irc.libera.chat" required />
-          </label>
-          <label class="port">
-            <span>Port</span>
-            <input v-model.number="form.port" type="number" min="1" max="65535" />
-          </label>
-          <label class="tls">
-            <span>TLS</span>
-            <input v-model="form.tls" type="checkbox" />
-          </label>
-        </div>
-        <label>
-          <span>Nick</span>
-          <input v-model="form.nick" required />
-        </label>
-        <label>
-          <span>Real name (optional)</span>
-          <input v-model="form.realname" />
-        </label>
-        <p v-if="showSaslHint" class="sasl-hint">
-          <strong>{{ picked?.name }}</strong> blocks unauthenticated connections from hosted
-          servers, so the SASL account and password below are <strong>not optional</strong> —
-          register your nick with the network first, then enter it here.
-        </p>
-        <div class="row">
-          <label class="grow">
-            <span>SASL account{{ saslRequired ? '' : ' (optional)' }}</span>
-            <input
-              v-model="form.sasl_account"
-              :placeholder="form.nick || 'defaults to nick'"
-              autocomplete="off"
-            />
-          </label>
-          <label class="grow">
-            <span class="field-label">
-              <span>SASL password{{ saslRequired ? '' : ' (optional)' }}</span>
-              <button
-                v-if="isEdit && props.network?.has_sasl_password"
-                type="button"
-                class="clear-link"
-                :aria-label="saslPasswordClearLabel"
-                @click="toggleClearSasl"
-              >
-                {{ clearSaslPassword ? 'keep' : 'clear' }}
-              </button>
-            </span>
-            <input
-              v-model="form.sasl_password"
-              type="password"
-              autocomplete="off"
-              :disabled="clearSaslPassword"
-              :placeholder="saslPasswordPlaceholder"
-            />
-          </label>
-        </div>
-        <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
-          {{ showAdvanced ? '− Advanced options' : '+ Advanced options' }}
-        </button>
-        <div v-if="showAdvanced" class="advanced">
+        <template v-if="!isSlack">
+          <div class="row">
+            <label class="grow">
+              <span>Host</span>
+              <input v-model="form.host" placeholder="irc.libera.chat" required />
+            </label>
+            <label class="port">
+              <span>Port</span>
+              <input v-model.number="form.port" type="number" min="1" max="65535" />
+            </label>
+            <label class="tls">
+              <span>TLS</span>
+              <input v-model="form.tls" type="checkbox" />
+            </label>
+          </div>
           <label>
-            <span class="field-label">
-              <span>Server password (optional)</span>
-              <button
-                v-if="isEdit && props.network?.has_password"
-                type="button"
-                class="clear-link"
-                :aria-label="serverPasswordClearLabel"
-                @click="toggleClearServer"
-              >
-                {{ clearServerPassword ? 'keep' : 'clear' }}
-              </button>
-            </span>
-            <input
-              v-model="form.server_password"
-              type="password"
-              autocomplete="off"
-              :disabled="clearServerPassword"
-              :placeholder="serverPasswordPlaceholder"
-            />
-          </label>
-          <label v-if="!isEdit">
-            <span>Default channel</span>
-            <input v-model="form.default_channel" :placeholder="channelPlaceholder" />
+            <span>Nick</span>
+            <input v-model="form.nick" required />
           </label>
           <label>
-            <span>Commands to run on connect</span>
-            <textarea
-              v-model="form.connect_commands"
-              rows="4"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="AUTH <user> <password> etc…"
-            />
-            <small
-              >One per line, e.g. for opering up on connect. If you need to add a (eg, 15 sec) delay
-              between commands, you can write: WAIT 15</small
-            >
+            <span>Real name (optional)</span>
+            <input v-model="form.realname" />
           </label>
+          <p v-if="showSaslHint" class="sasl-hint">
+            <strong>{{ picked?.name }}</strong> blocks unauthenticated connections from hosted
+            servers, so the SASL account and password below are <strong>not optional</strong> —
+            register your nick with the network first, then enter it here.
+          </p>
+          <div class="row">
+            <label class="grow">
+              <span>SASL account{{ saslRequired ? '' : ' (optional)' }}</span>
+              <input
+                v-model="form.sasl_account"
+                :placeholder="form.nick || 'defaults to nick'"
+                autocomplete="off"
+              />
+            </label>
+            <label class="grow">
+              <span class="field-label">
+                <span>SASL password{{ saslRequired ? '' : ' (optional)' }}</span>
+                <button
+                  v-if="isEdit && props.network?.has_sasl_password"
+                  type="button"
+                  class="clear-link"
+                  :aria-label="saslPasswordClearLabel"
+                  @click="toggleClearSasl"
+                >
+                  {{ clearSaslPassword ? 'keep' : 'clear' }}
+                </button>
+              </span>
+              <input
+                v-model="form.sasl_password"
+                type="password"
+                autocomplete="off"
+                :disabled="clearSaslPassword"
+                :placeholder="saslPasswordPlaceholder"
+              />
+            </label>
+          </div>
+          <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+            {{ showAdvanced ? '− Advanced options' : '+ Advanced options' }}
+          </button>
+          <div v-if="showAdvanced" class="advanced">
+            <label>
+              <span class="field-label">
+                <span>Server password (optional)</span>
+                <button
+                  v-if="isEdit && props.network?.has_password"
+                  type="button"
+                  class="clear-link"
+                  :aria-label="serverPasswordClearLabel"
+                  @click="toggleClearServer"
+                >
+                  {{ clearServerPassword ? 'keep' : 'clear' }}
+                </button>
+              </span>
+              <input
+                v-model="form.server_password"
+                type="password"
+                autocomplete="off"
+                :disabled="clearServerPassword"
+                :placeholder="serverPasswordPlaceholder"
+              />
+            </label>
+            <label v-if="!isEdit">
+              <span>Default channel</span>
+              <input v-model="form.default_channel" :placeholder="channelPlaceholder" />
+            </label>
+            <label>
+              <span>Commands to run on connect</span>
+              <textarea
+                v-model="form.connect_commands"
+                rows="4"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="AUTH <user> <password> etc…"
+              />
+              <small
+                >One per line, e.g. for opering up on connect. If you need to add a (eg, 15 sec)
+                delay between commands, you can write: WAIT 15</small
+              >
+            </label>
+            <label class="check">
+              <input v-model="form.autoconnect" type="checkbox" />
+              <span>Reconnect automatically</span>
+            </label>
+            <label class="check">
+              <input v-model="form.trusted_certificates" type="checkbox" />
+              <span>Only allow trusted certificates</span>
+            </label>
+          </div>
+        </template>
+        <template v-else>
+          <label>
+            <span>Bot/User token</span>
+            <input
+              v-model="form.slack_bot_token"
+              type="password"
+              autocomplete="off"
+              :placeholder="
+                isEdit && netRaw?.has_slack_tokens
+                  ? '(saved — type to replace)'
+                  : 'xoxb-… or xoxp-…'
+              "
+            />
+          </label>
+          <label>
+            <span>App-level token</span>
+            <input
+              v-model="form.slack_app_token"
+              type="password"
+              autocomplete="off"
+              :placeholder="
+                isEdit && netRaw?.has_slack_tokens ? '(saved — type to replace)' : 'xapp-…'
+              "
+            />
+          </label>
+          <small class="slack-hint">
+            Create a Slack app with <strong>Socket Mode</strong> enabled. The app token needs
+            <code>connections:write</code>; the bot/user token needs the conversations, history,
+            users and <code>chat:write</code> scopes.
+          </small>
           <label class="check">
             <input v-model="form.autoconnect" type="checkbox" />
             <span>Reconnect automatically</span>
           </label>
-          <label class="check">
-            <input v-model="form.trusted_certificates" type="checkbox" />
-            <span>Only allow trusted certificates</span>
-          </label>
-        </div>
+        </template>
         <p v-if="error" class="error">{{ error }}</p>
       </div>
       <footer class="modal-footer">
@@ -203,7 +250,14 @@ const form = reactive({
   default_channel: '#lurker',
   autoconnect: netRaw ? !!netRaw.autoconnect : true,
   connect_commands: (netRaw?.connect_commands as string | undefined) ?? '',
+  // Chat protocol. 'slack' swaps the IRC connection fields for two token inputs;
+  // the server fills placeholder host/nick for Slack rows.
+  provider: (netRaw?.provider as string | undefined) ?? 'irc',
+  slack_bot_token: '',
+  slack_app_token: '',
 });
+
+const isSlack = computed(() => form.provider === 'slack');
 
 // Auto-expand advanced when editing a row that already has any advanced value
 // set, so the user doesn't have to hunt for a saved password or connect script
@@ -339,6 +393,9 @@ async function submit(): Promise<void> {
       else if (clearServerPassword.value) patch.server_password = '';
       if (form.sasl_password) patch.sasl_password = form.sasl_password;
       else if (clearSaslPassword.value) patch.sasl_password = '';
+      // Slack tokens are write-only too: a typed value replaces, blank keeps.
+      if (form.slack_bot_token) patch.slack_bot_token = form.slack_bot_token;
+      if (form.slack_app_token) patch.slack_app_token = form.slack_app_token;
       // Saving only persists the row — it never cycles the live connection.
       // Connection-relevant edits (host/port/nick/credentials) take effect on
       // the next connect; the explicit "Reconnect" button below applies them

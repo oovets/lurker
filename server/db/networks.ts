@@ -168,6 +168,8 @@ export function updateNetwork(
     'sasl_account',
     'sasl_password',
     'connect_commands',
+    'slack_bot_token',
+    'slack_app_token',
   ];
   const setClauses: string[] = [];
   const params: unknown[] = [];
