@@ -102,14 +102,60 @@ read-state all work unchanged. Uses the official `@slack/web-api` +
 - **Whole-workspace search** via `search.messages` for a Slack-scoped query
   (needs a user token; gracefully falls back to local mirror search otherwise).
 
+### Added — iMessage support (via BlueBubbles)
+
+A third provider, `ImessageConnection`, implementing the same `Connection`
+contract. It is a client of a self-hosted **BlueBubbles** server (an iMessage
+bridge that runs on a Mac and exposes a REST API + Socket.IO feed), so the Lurker
+server talks HTTP+WS to the Mac while the client renders iMessage exactly like
+IRC and Slack. `github.com/oovets/imessage-tui` is the reference for the
+BlueBubbles calls + data model.
+
+- Per-network `provider: 'imessage'` plus an `imessage_server_url` (cleartext)
+  and `imessage_password` (encrypted at rest); a provider toggle + two fields in
+  the network form.
+- Chats become buffers: 1:1 chats as DMs (contact-resolved name), group chats as
+  participant-named buffers with a member list. Contacts resolve handle
+  addresses to display names, matching on the last 9 digits so formatting
+  differences (spaces/dashes, present/absent country code) still resolve.
+- The sidebar orders Slack/iMessage buffers by **recent activity** (newest on
+  top, like the native apps) instead of alphabetically, so active chats rise, a
+  new message bumps its chat up, and one-off numbers sink. IRC keeps its
+  channels-first alphabetical order.
+- History backfill on connect, live messages via the Socket.IO feed, sending
+  (`POST /message/text`), and **mark-as-read** sync (`POST /chat/{guid}/read`).
+  A reconciliation poll re-fetches chats + recent messages so brand-new chats
+  and any socket-missed messages still appear, and de-dups against the mirror so
+  reconnects don't re-insert history.
+- **Tapbacks** (love/like/dislike/laugh/emphasize/question) fold onto the target
+  message as reaction chips, and click-to-react sends a tapback.
+- **Image / file attachments** stream through a same-origin proxy route
+  (`/api/networks/:id/imessage-attachment/:guid`).
+- A credential-free demo mode (sentinel `demo` server/password) with a canned
+  1:1 + group chat, a tapback, and a live drip.
+
+### Added — Rich media (all providers)
+
+- **Link previews**: messages containing a URL show a rich card (title,
+  description, thumbnail, site) for Spotify, YouTube, news sites, etc. Unfurled
+  server-side (`GET /api/link-preview`) via provider oEmbed → noembed →
+  OpenGraph/Twitter-card HTML, SSRF-guarded and cached. The client fetches each
+  card lazily (IntersectionObserver) so opening a long history never fires a
+  request per link.
+- **Inline video**: video attachments (iMessage/Slack) render as an inline
+  `<video controls>` player instead of a download link, alongside the existing
+  inline images.
+
 ### Changed
 
 - `ircManager` is provider-aware: `byUser` holds an `IrcConnection |
-SlackConnection` union and `startNetwork` branches on `network.provider`;
-  IRC-only paths (E2E, away/MONITOR, raw, modes) guard on the provider.
+SlackConnection | ImessageConnection` union and `startNetwork` branches on
+  `network.provider`; IRC-only paths (E2E, away/MONITOR, raw, modes) guard on the
+  provider. The Slack-scoped `wsHub` hooks (react, mark-read) now cover both
+  non-IRC providers.
 - `IrcConnection` now explicitly `implements Connection` and gained a
   `selfName()` helper; shared event/state types are exported.
-- New dependencies: `@slack/web-api`, `@slack/socket-mode`.
+- New dependencies: `@slack/web-api`, `@slack/socket-mode`, `socket.io-client`.
 
 ### Notes & limitations
 
@@ -122,12 +168,16 @@ SlackConnection` union and `startNetwork` branches on `network.provider`;
   but does not scroll to the exact message (a hit may live outside the mirrored
   window).
 - Block Kit rendering is a text/markup fallback, not full visual block layout.
+- iMessage requires a reachable **BlueBubbles** server on a Mac; full send +
+  tapback support needs its Private API enabled. Lurker connects over HTTP+WS, so
+  the Mac must be reachable from wherever the Lurker server runs.
 
 ### Tests
 
-- Server + client test suite green: **1493 tests**.
+- Server + client test suite green: **1504 tests**.
 - New coverage includes `slackConnection.test.ts` (connect, history, live,
   send, threads, reactions, click-to-react, edits/deletes, presence, page-up,
   mentions, bot names, markup, mark-read, Block Kit, mpim naming, join, search,
-  custom emoji), `slackOauth` service + route tests, the `slackEmoji` store, and
-  `networks` store/pane tests.
+  custom emoji), `imessageConnection.test.ts` (connect, history, tapbacks,
+  attachments, live, send, react, mark-read, demo), `slackOauth` service + route
+  tests, the `slackEmoji` store, and `networks` store/pane tests.

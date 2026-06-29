@@ -38,6 +38,9 @@ export const ENCRYPTED_NETWORK_COLUMNS = [
   // Slack credentials — same at-rest encryption as the IRC secrets above.
   'slack_bot_token',
   'slack_app_token',
+  // iMessage (BlueBubbles) API password. The server URL is not a secret and is
+  // left in cleartext.
+  'imessage_password',
 ] as const;
 
 // FTS5 maintains its own shadow tables (messages_fts_data, _idx, _content,
@@ -113,6 +116,8 @@ export const EXPORT_TABLES = Object.freeze({
       'provider',
       'slack_bot_token',
       'slack_app_token',
+      'imessage_server_url',
+      'imessage_password',
     ],
   },
 

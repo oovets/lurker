@@ -4,12 +4,13 @@
 import { EventEmitter } from 'events';
 import { IrcConnection } from './ircConnection.js';
 import { SlackConnection } from './slackConnection.js';
+import { ImessageConnection } from './imessageConnection.js';
 import * as systemLog from './systemLog.js';
 
 // A managed connection is either protocol. Typed as the concrete union (not the
 // Connection interface) so `conn.provider === 'irc'` narrows to IrcConnection
 // for the IRC-only paths (RPE2E, multiline). Slack rows go to SlackConnection.
-type ManagedConnection = IrcConnection | SlackConnection;
+type ManagedConnection = IrcConnection | SlackConnection | ImessageConnection;
 import connectScheduler from './connectScheduler.js';
 import {
   listNetworksForUser,
@@ -162,6 +163,28 @@ class IrcManager extends EventEmitter {
         connectScheduler.schedule(network.host || `slack:${networkId}`, launchSlack);
       else launchSlack();
       return slackConn;
+    }
+
+    if (network.provider === 'imessage') {
+      const imConn = new ImessageConnection({
+        network,
+        onEvent: (event) => this.emit('event', event),
+      });
+      this.connectionsForUser(userId).set(networkId, imConn);
+      const launchImessage = (): void => {
+        if (this.getConnection(userId, networkId) !== imConn || imConn.disposed) return;
+        systemLog.log({
+          userId,
+          scope: `net:${network.name}`,
+          fields: { networkId },
+          text: `Connecting to iMessage (BlueBubbles) ${network.name}`,
+        });
+        imConn.connect();
+      };
+      if (opts.deferrable)
+        connectScheduler.schedule(network.host || `imessage:${networkId}`, launchImessage);
+      else launchImessage();
+      return imConn;
     }
 
     const conn = new IrcConnection({

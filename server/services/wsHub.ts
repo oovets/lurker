@@ -1727,10 +1727,11 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         );
         break;
       case 'react': {
-        // Slack click-to-react: add/remove the user's reaction. Provider-guarded
-        // so it narrows to SlackConnection (reactions are Slack-only).
+        // Click-to-react: add/remove the user's reaction. Provider-guarded to the
+        // non-IRC adapters (Slack reactions / iMessage tapbacks), which both
+        // expose react() with the same signature.
         const conn = ircManager.getConnection(userId, msg.networkId as number);
-        if (conn?.provider === 'slack') {
+        if (conn && conn.provider !== 'irc') {
           conn.react(
             msg.target as string,
             msg.slackTs as string,
@@ -1766,10 +1767,11 @@ export function attachWsHub(httpServer: HttpServer, sessionSecret: string) {
         if (networkId !== null && !networkId) break;
         const lastReadId = setReadState(userId, networkId, target, requested);
         broadcastReadState(userId, networkId, target, lastReadId);
-        // Mirror the read pointer back to Slack so the workspace clears unread.
+        // Mirror the read pointer back to the provider (Slack workspace /
+        // iMessage chat) so it clears unread there too.
         if (networkId) {
           const conn = ircManager.getConnection(userId, networkId);
-          if (conn?.provider === 'slack') conn.markRead(target, requested);
+          if (conn && conn.provider !== 'irc') conn.markRead(target, requested);
         }
         break;
       }

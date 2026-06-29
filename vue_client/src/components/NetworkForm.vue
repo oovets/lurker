@@ -27,12 +27,16 @@
             <input v-model="form.provider" type="radio" value="slack" />
             <span>Slack</span>
           </label>
+          <label class="check">
+            <input v-model="form.provider" type="radio" value="imessage" />
+            <span>iMessage</span>
+          </label>
         </div>
         <label>
           <span>Name</span>
-          <input v-model="form.name" :placeholder="isSlack ? 'My Workspace' : 'Libera'" required />
+          <input v-model="form.name" :placeholder="namePlaceholder" required />
         </label>
-        <template v-if="!isSlack">
+        <template v-if="isIrc">
           <div class="row">
             <label class="grow">
               <span>Host</span>
@@ -144,7 +148,7 @@
             </label>
           </div>
         </template>
-        <template v-else>
+        <template v-else-if="isSlack">
           <div v-if="!isEdit && slackOauthAvailable" class="slack-oauth">
             <button type="button" class="slack-oauth-btn" @click="startSlackOauth">
               <i class="fa-brands fa-slack"></i>
@@ -184,6 +188,37 @@
             Create a Slack app with <strong>Socket Mode</strong> enabled. The app token needs
             <code>connections:write</code>; the bot/user token needs the conversations, history,
             users and <code>chat:write</code> scopes.
+          </small>
+          <label class="check">
+            <input v-model="form.autoconnect" type="checkbox" />
+            <span>Reconnect automatically</span>
+          </label>
+        </template>
+        <template v-else-if="isImessage">
+          <label>
+            <span>BlueBubbles server URL</span>
+            <input
+              v-model="form.imessage_server_url"
+              type="url"
+              autocomplete="off"
+              placeholder="https://your-mac:1234"
+            />
+          </label>
+          <label>
+            <span>API password</span>
+            <input
+              v-model="form.imessage_password"
+              type="password"
+              autocomplete="off"
+              :placeholder="
+                isEdit && netRaw?.has_imessage ? '(saved — type to replace)' : 'password'
+              "
+            />
+          </label>
+          <small class="slack-hint">
+            Connects to a <strong>BlueBubbles</strong> server running on your Mac (with the iMessage
+            Private API enabled for sending + tapbacks). The URL and password are the same ones the
+            BlueBubbles app shows under its API settings.
           </small>
           <label class="check">
             <input v-model="form.autoconnect" type="checkbox" />
@@ -262,14 +297,21 @@ const form = reactive({
   default_channel: '#lurker',
   autoconnect: netRaw ? !!netRaw.autoconnect : true,
   connect_commands: (netRaw?.connect_commands as string | undefined) ?? '',
-  // Chat protocol. 'slack' swaps the IRC connection fields for two token inputs;
-  // the server fills placeholder host/nick for Slack rows.
+  // Chat protocol. 'slack'/'imessage' swap the IRC connection fields for their
+  // own credential inputs; the server fills placeholder host/nick for those rows.
   provider: (netRaw?.provider as string | undefined) ?? 'irc',
   slack_bot_token: '',
   slack_app_token: '',
+  imessage_server_url: (netRaw?.imessage_server_url as string | undefined) ?? '',
+  imessage_password: '',
 });
 
 const isSlack = computed(() => form.provider === 'slack');
+const isImessage = computed(() => form.provider === 'imessage');
+const isIrc = computed(() => !isSlack.value && !isImessage.value);
+const namePlaceholder = computed(() =>
+  isSlack.value ? 'My Workspace' : isImessage.value ? 'iMessage' : 'Libera',
+);
 
 // Whether the server has Slack OAuth credentials configured. When true (and
 // we're creating, not editing) we offer the one-click "Add to Slack" button and
@@ -428,6 +470,10 @@ async function submit(): Promise<void> {
       // Slack tokens are write-only too: a typed value replaces, blank keeps.
       if (form.slack_bot_token) patch.slack_bot_token = form.slack_bot_token;
       if (form.slack_app_token) patch.slack_app_token = form.slack_app_token;
+      // iMessage: the server URL is a plain field (sent when present); the API
+      // password is write-only (a typed value replaces, blank keeps).
+      if (form.imessage_server_url) patch.imessage_server_url = form.imessage_server_url;
+      if (form.imessage_password) patch.imessage_password = form.imessage_password;
       // Saving only persists the row — it never cycles the live connection.
       // Connection-relevant edits (host/port/nick/credentials) take effect on
       // the next connect; the explicit "Reconnect" button below applies them

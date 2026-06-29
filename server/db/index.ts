@@ -752,6 +752,11 @@ ensureColumn('networks', 'position', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('networks', 'provider', `TEXT NOT NULL DEFAULT 'irc'`);
 ensureColumn('networks', 'slack_bot_token', 'TEXT');
 ensureColumn('networks', 'slack_app_token', 'TEXT');
+// iMessage rows ('imessage' provider) talk to a BlueBubbles server: the server
+// URL (cleartext) and its API password (encrypted at rest like the other
+// secrets). Unused for IRC/Slack rows.
+ensureColumn('networks', 'imessage_server_url', 'TEXT');
+ensureColumn('networks', 'imessage_password', 'TEXT');
 ensureColumn('users', 'password_hash', 'TEXT');
 ensureColumn('users', 'last_seen_at', 'TEXT');
 // Account access state, orthogonal to role. A paused account keeps all its data

@@ -78,6 +78,7 @@ interface FileChip {
   name: string;
   url: string;
   image: boolean;
+  video: boolean;
 }
 
 // One emoji reaction on a message — rendered as a chip by the client. `mine`
@@ -512,8 +513,8 @@ export class SlackConnection implements Connection {
         text: 'here are the attachments',
         ms: now - 31_000,
         files: [
-          { name: 'demo image.svg', url: demoImg, image: true },
-          { name: 'report.pdf', url: 'https://example.com/report.pdf', image: false },
+          { name: 'demo image.svg', url: demoImg, image: true, video: false },
+          { name: 'report.pdf', url: 'https://example.com/report.pdf', image: false, video: false },
         ],
       },
       {
@@ -1466,6 +1467,7 @@ export class SlackConnection implements Connection {
         name,
         url: `/api/networks/${this.network.id}/slack-file/${f.id}`,
         image: mimetype.startsWith('image/'),
+        video: mimetype.startsWith('video/'),
       });
     }
     return {

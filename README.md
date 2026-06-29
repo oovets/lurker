@@ -24,9 +24,9 @@ Lurker runs as an always-on server that stays connected to IRC on your behalf, k
 
 # Fork additions
 
-This fork extends upstream Lurker with split-window panes, Slack support, and a
-richer composer. The full, itemized list is in [CHANGELOG.md](CHANGELOG.md);
-the highlights:
+This fork extends upstream Lurker with split-window panes, Slack support,
+iMessage support, and a richer composer. The full, itemized list is in
+[CHANGELOG.md](CHANGELOG.md); the highlights:
 
 - **Split-window panes (desktop).** Open several buffers side by side in an
   auto-wrapping grid, with one shared input bound to the focused pane.
@@ -46,9 +46,19 @@ the highlights:
     workspace-custom emoji in both the message view and the composer.
   - A credential-free demo mode (sentinel `demo` tokens) that exercises the
     whole path without a real workspace.
+- **iMessage support.** A third provider alongside IRC and Slack, via a
+  self-hosted [BlueBubbles](https://bluebubbles.app) server running on a Mac.
+  The Lurker server talks to it over HTTP + Socket.IO; the client renders
+  iMessage chats exactly like IRC and Slack. It covers 1:1 and group chats as
+  buffers, history, live messages, sending, tapbacks as reaction chips, image
+  and file attachments, and mark-as-read sync — plus a credential-free demo
+  mode.
 - **Composer.** ASCII emoticons (`:)`, `<3`, `:D`, ...) auto-convert to emoji as
   you type, and the `:shortcode:` autocomplete now also surfaces a Slack
   workspace's custom emoji.
+- **Rich media (all providers).** Links to Spotify, YouTube, news sites, etc.
+  unfurl into preview cards (server-side, SSRF-guarded, fetched lazily as they
+  scroll into view), and video attachments play inline.
 
 Slack OAuth is configured through the `SLACK_*` environment variables documented
 in [`.env.example`](.env.example); without them, Slack networks are added by
@@ -67,7 +77,7 @@ pasting tokens in the network form.
 
 # Stack
 
-- **Server** — TypeScript on Node (run via `tsx`), Express, `irc-framework`, `ws`, `better-sqlite3`, `sharp`, `web-push`, `@slack/web-api`, `@slack/socket-mode`
+- **Server** — TypeScript on Node (run via `tsx`), Express, `irc-framework`, `ws`, `better-sqlite3`, `sharp`, `web-push`, `@slack/web-api`, `@slack/socket-mode`, `socket.io-client`
 - **Client** — TypeScript, Vue 3, Vite, Pinia, `vue-router`
 - **Tooling** — Vitest, oxlint, oxfmt
 

@@ -124,8 +124,8 @@ export interface BufferMessage {
   // roots at the parent rather than a reply.
   threadRoot?: string;
   reactions?: Array<{ name: string; count: number; mine?: boolean }>;
-  // Slack file attachments — same-origin proxy URL + image flag.
-  files?: Array<{ name: string; url: string; image?: boolean }>;
+  // Provider file attachments — same-origin proxy URL + media-kind flags.
+  files?: Array<{ name: string; url: string; image?: boolean; video?: boolean }>;
   [key: string]: unknown;
 }
 

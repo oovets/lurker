@@ -57,6 +57,8 @@ function makeConn(): IrcConnection {
       provider: 'irc',
       slack_bot_token: null,
       slack_app_token: null,
+      imessage_server_url: null,
+      imessage_password: null,
       created_at: new Date().toISOString(),
     },
     onEvent: () => {},

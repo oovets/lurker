@@ -142,6 +142,38 @@ export function getMessageExtra(
   }
 }
 
+// How many messages a buffer already holds — lets a provider skip re-backfilling
+// a chat whose history is already mirrored (avoids duplicate inserts on every
+// reconnect).
+const countByTargetStmt = db.prepare(
+  `SELECT COUNT(*) AS n FROM messages WHERE network_id = ? AND target = ?`,
+);
+export function countMessagesForTarget(networkId: number, target: string): number {
+  return (countByTargetStmt.get(networkId, target) as { n: number }).n;
+}
+
+// Provider message ids (the `extra.slackTs` we stamp on every Slack/iMessage
+// row) for the most recent `limit` messages of a network — used to seed a
+// reconnecting adapter's de-dup set so a poll/backfill overlap doesn't re-insert
+// messages already in the mirror.
+const recentExtrasStmt = db.prepare(
+  `SELECT extra FROM messages WHERE network_id = ? ORDER BY id DESC LIMIT ?`,
+);
+export function recentProviderIds(networkId: number, limit: number): string[] {
+  const rows = recentExtrasStmt.all(networkId, limit) as Array<{ extra: string | null }>;
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (!row.extra) continue;
+    try {
+      const id = (JSON.parse(row.extra) as { slackTs?: unknown }).slackTs;
+      if (typeof id === 'string') ids.push(id);
+    } catch {
+      /* skip unparseable */
+    }
+  }
+  return ids;
+}
+
 function rowToEvent(row: MessageRow): MessageEvent {
   const event: MessageEvent = {
     id: row.id,

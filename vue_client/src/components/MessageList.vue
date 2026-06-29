@@ -107,6 +107,7 @@
           </div>
           <span class="body" :class="bodyClass(row.m)">
             <RenderSegments
+              v-if="!hideBodyText(row.m)"
               :segments="textSegments(row.m)"
               :self-color="selfColor"
               :network-id="buffer?.networkId ?? null"
@@ -143,6 +144,14 @@
                   class="attachment-img"
                   @click.stop="openImage(f.url)"
                 />
+                <video
+                  v-else-if="f.video"
+                  :src="f.url"
+                  controls
+                  preload="metadata"
+                  class="attachment-video"
+                  @click.stop
+                ></video>
                 <a
                   v-else
                   :href="f.url"
@@ -154,6 +163,7 @@
                 >
               </template>
             </span>
+            <LinkPreview v-for="u in urlsOf(row.m)" :key="u" :url="u" />
           </span>
           <span class="time">{{ row.continuationTime ? '' : time(row.m?.time) }}</span>
         </template>
@@ -175,7 +185,7 @@
           >
           <span class="body" :class="bodyClass(row.m)">
             <RenderSegments
-              v-if="hasInlineText(row.m)"
+              v-if="hasInlineText(row.m) && !hideBodyText(row.m)"
               :segments="textSegments(row.m)"
               :self-color="selfColor"
               :network-id="buffer?.networkId ?? null"
@@ -301,6 +311,14 @@
                   class="attachment-img"
                   @click.stop="openImage(f.url)"
                 />
+                <video
+                  v-else-if="f.video"
+                  :src="f.url"
+                  controls
+                  preload="metadata"
+                  class="attachment-video"
+                  @click.stop
+                ></video>
                 <a
                   v-else
                   :href="f.url"
@@ -312,6 +330,7 @@
                 >
               </template>
             </span>
+            <LinkPreview v-for="u in urlsOf(row.m)" :key="u" :url="u" />
           </span>
         </template>
         <div
@@ -334,7 +353,7 @@
             <i :class="a.icon"></i>
           </button>
           <button
-            v-if="canOpenThread(row.m)"
+            v-if="canReact(row.m)"
             type="button"
             class="row-action"
             title="Add reaction"
@@ -402,6 +421,8 @@ import { collapseDisplay } from '../utils/collapseDisplay.js';
 import NickRef from './NickRef.vue';
 import LinkedText from './LinkedText.vue';
 import RenderSegments from './RenderSegments.vue';
+import LinkPreview from './LinkPreview.vue';
+import { previewRef } from '../composables/useLinkPreviews.js';
 import { emojiGlyph } from '../utils/emojiShortcodes.js';
 import { useImageModal } from '../composables/useImageModal.js';
 import { useContextMenu } from '../composables/useContextMenu.js';
@@ -1286,7 +1307,43 @@ function reactionImageOf(name: string): string | null {
 
 // Slack file attachments (same-origin proxy URLs). Images render as a clickable
 // thumbnail that opens the image viewer; other files as a download link.
-type FileChip = { name: string; url: string; image?: boolean };
+// When a message is *just* a URL and its preview card has loaded, hide the raw
+// URL text (the card replaces it, like iMessage/Slack). If no preview resolves,
+// the URL stays visible as a safe fallback.
+const SINGLE_URL_RE = /^https?:\/\/[^\s<>"']+$/;
+function linkOnlyUrl(m: ChatMessage | undefined): string | null {
+  const text = (m as { text?: string } | undefined)?.text?.trim();
+  if (!text) return null;
+  const stripped = text.replace(/[).,!?'"]+$/, '');
+  return SINGLE_URL_RE.test(stripped) ? stripped : null;
+}
+function hideBodyText(m: ChatMessage | undefined): boolean {
+  const url = linkOnlyUrl(m);
+  if (!url) return false;
+  const v = previewRef(url).value;
+  return !!(v && typeof v === 'object');
+}
+
+// Up to two unique http(s) URLs in a message, for link-preview cards. Trailing
+// punctuation (a URL ending a sentence) is trimmed.
+const URL_RE = /https?:\/\/[^\s<>"']+/g;
+function urlsOf(m: ChatMessage | undefined): string[] {
+  const text = (m as { text?: string } | undefined)?.text;
+  if (typeof text !== 'string' || !text.includes('http')) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(URL_RE)) {
+    const u = match[0].replace(/[).,!?'"]+$/, '');
+    if (!seen.has(u)) {
+      seen.add(u);
+      out.push(u);
+    }
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
+type FileChip = { name: string; url: string; image?: boolean; video?: boolean };
 function filesOf(m: ChatMessage | undefined): FileChip[] {
   return (m as { files?: FileChip[] } | undefined)?.files ?? [];
 }
@@ -1340,11 +1397,18 @@ function openReactionPicker(m: ChatMessage | undefined, ev: MouseEvent): void {
   reactionMenu.open(items, ev.clientX, ev.clientY);
 }
 
-// "Open thread": only Slack messages (slackTs) in a real channel/DM — not inside
-// a thread buffer already.
-function canOpenThread(m: ChatMessage | undefined): boolean {
+// Reactable: any provider message carrying a provider id (slackTs doubles as the
+// iMessage/Slack message id) in a real channel/DM — not inside a thread buffer.
+function canReact(m: ChatMessage | undefined): boolean {
   const sm = m as { slackTs?: string } | undefined;
   return !!sm?.slackTs && !m?.target?.startsWith(':thread:');
+}
+// "Open thread" is Slack-only — iMessage chats are flat, so the thread button
+// must not show there (it would create a stray :thread: buffer the server can't
+// populate). Gated on the network's provider in addition to canReact.
+function canOpenThread(m: ChatMessage | undefined): boolean {
+  if (!canReact(m)) return false;
+  return networks.networkById(m!.networkId)?.provider === 'slack';
 }
 // Open the thread as its own buffer in a NEW split pane beside the channel, and
 // ask the server to fetch + stream it. Roots at the parent ts (threadRoot) when
@@ -2193,6 +2257,13 @@ watch(
   border: 1px solid var(--border);
   cursor: pointer;
   object-fit: cover;
+}
+.attachment-video {
+  max-height: 240px;
+  max-width: 360px;
+  border-radius: var(--radius-1, 4px);
+  border: 1px solid var(--border);
+  background: #000;
 }
 .attachment-link {
   color: var(--accent);

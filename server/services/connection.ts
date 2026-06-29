@@ -31,9 +31,10 @@ export interface NetworkSnapshot {
 }
 
 export interface Connection {
-  // Discriminant for the IrcConnection | SlackConnection union in ircManager —
-  // lets the manager narrow to the IRC implementation for IRC-only paths.
-  readonly provider: 'irc' | 'slack';
+  // Discriminant for the IrcConnection | SlackConnection | ImessageConnection
+  // union in ircManager — lets the manager narrow to a specific implementation
+  // for provider-only paths.
+  readonly provider: 'irc' | 'slack' | 'imessage';
   network: Network;
   // Connection lifecycle state ('idle' | 'connecting' | 'connected' |
   // 'disconnected' | …) — surfaced in the snapshot and the server buffer header.

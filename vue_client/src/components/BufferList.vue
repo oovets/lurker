@@ -436,8 +436,26 @@ function sortKey(target: string): string {
   return target.replace(/^#+/, '').toLowerCase();
 }
 
+// Recency = the wall-clock time of the buffer's latest message. We sort on the
+// actual message time (not the DB autoincrement id) because bulk-backfilled
+// history is inserted in arbitrary chat order, so ids reflect insert order, not
+// when a message was sent. Within a buffer the last message is the newest, so
+// its `time` is the conversation's last-activity. Falls back to 0 (sinks) when a
+// buffer has no loaded messages.
+function recencyOf(buf: Buffer): number {
+  const last = buf.messages[buf.messages.length - 1];
+  const time = last?.time;
+  const t = typeof time === 'string' ? Date.parse(time) : NaN;
+  return Number.isNaN(t) ? 0 : t;
+}
+
 function unpinnedBufs(networkId: number): Buffer[] {
   const pinnedSet = new Set(pins.forNetwork(networkId));
+  // Slack/iMessage workspaces have hundreds of DMs, so order them by recent
+  // activity (newest on top, like the native apps) rather than alphabetically —
+  // a new message bumps its chat up and one-off numbers sink. IRC keeps its
+  // channels-first alphabetical order.
+  const byActivity = networks.networkById(networkId)?.provider !== 'irc';
   return buffers
     .forNetwork(networkId)
     .filter(
@@ -445,6 +463,10 @@ function unpinnedBufs(networkId: number): Buffer[] {
         !isServerBuffer(b) && !pinnedSet.has(b.target) && !isFriendPrimaryDm(b.networkId, b.target),
     )
     .toSorted((a, b) => {
+      if (byActivity) {
+        const diff = recencyOf(b) - recencyOf(a);
+        return diff !== 0 ? diff : sortKey(a.target).localeCompare(sortKey(b.target));
+      }
       const oa = bufferOrder(a);
       const ob = bufferOrder(b);
       if (oa !== ob) return oa - ob;

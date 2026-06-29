@@ -25,11 +25,58 @@ router.use(requireAuth);
 // sidebar renders. See blockWritesWhenPaused.
 router.use(blockWritesWhenPaused);
 
+// Stream proxied media with HTTP Range support. Safari (and iOS) refuse to play
+// a <video> unless the server advertises Accept-Ranges and answers range
+// requests with 206 — without this, .mov/.mp4 attachments never preview. We
+// already hold the full buffer in memory, so we just slice it.
+function sendMedia(req: Request, res: Response, mimetype: string, data: ArrayBuffer): void {
+  const buf = Buffer.from(data);
+  res.setHeader('Content-Type', mimetype);
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.setHeader('Accept-Ranges', 'bytes');
+  const range = req.headers.range;
+  const m = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+  if (m) {
+    let start: number;
+    let end: number;
+    if (!m[1] && m[2]) {
+      // Suffix range `bytes=-N`: the last N bytes (RFC 7233).
+      const n = Number.parseInt(m[2], 10);
+      start = Math.max(0, buf.length - (Number.isNaN(n) ? buf.length : n));
+      end = buf.length - 1;
+    } else {
+      start = m[1] ? Number.parseInt(m[1], 10) : 0;
+      end = m[2] ? Number.parseInt(m[2], 10) : buf.length - 1;
+    }
+    if (Number.isNaN(start)) start = 0;
+    if (Number.isNaN(end) || end >= buf.length) end = buf.length - 1;
+    if (start > end || start >= buf.length) {
+      res.status(416).setHeader('Content-Range', `bytes */${buf.length}`);
+      res.end();
+      return;
+    }
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${buf.length}`);
+    res.setHeader('Content-Length', end - start + 1);
+    res.end(buf.subarray(start, end + 1));
+    return;
+  }
+  res.setHeader('Content-Length', buf.length);
+  res.end(buf);
+}
+
 function networkPayload(network: Network | undefined | null): Record<string, unknown> | null {
   if (!network) return null;
-  // Never ship secrets to the client — drop the IRC passwords and the Slack
-  // tokens, surfacing only booleans for "is one set".
-  const { server_password, sasl_password, slack_bot_token, slack_app_token, ...safe } = network;
+  // Never ship secrets to the client — drop the IRC passwords, the Slack
+  // tokens, and the iMessage password, surfacing only booleans for "is one set".
+  const {
+    server_password,
+    sasl_password,
+    slack_bot_token,
+    slack_app_token,
+    imessage_password,
+    ...safe
+  } = network;
   return {
     ...safe,
     tls: !!network.tls,
@@ -38,6 +85,7 @@ function networkPayload(network: Network | undefined | null): Record<string, unk
     has_password: !!server_password,
     has_sasl_password: !!sasl_password,
     has_slack_tokens: !!(slack_bot_token && slack_app_token),
+    has_imessage: !!(network.imessage_server_url && imessage_password),
     channels: listChannels(network.id),
   };
 }
@@ -66,13 +114,23 @@ router.post('/', (req: Request, res: Response) => {
     provider,
     slack_bot_token,
     slack_app_token,
+    imessage_server_url,
+    imessage_password,
   } = req.body || {};
   const isSlack = provider === 'slack';
-  // Slack rows need only a name + the two tokens; host/nick are placeholders the
-  // adapter ignores. IRC keeps its original required set.
+  const isImessage = provider === 'imessage';
+  // Slack/iMessage rows need only a name + their credentials; host/nick are
+  // placeholders the adapter ignores. IRC keeps its original required set.
   if (isSlack) {
     if (!name || !slack_bot_token || !slack_app_token) {
       res.status(400).json({ error: 'name, slack_bot_token, and slack_app_token are required' });
+      return;
+    }
+  } else if (isImessage) {
+    if (!name || !imessage_server_url || !imessage_password) {
+      res
+        .status(400)
+        .json({ error: 'name, imessage_server_url, and imessage_password are required' });
       return;
     }
   } else if (!name || !host || !nick) {
@@ -80,13 +138,14 @@ router.post('/', (req: Request, res: Response) => {
     return;
   }
 
+  const placeholderHost = isSlack ? 'slack' : isImessage ? 'imessage' : host;
   const network = createNetwork(req.user!.id, {
     name,
-    host: isSlack ? 'slack' : host,
+    host: placeholderHost,
     port,
     tls,
     trusted_certificates,
-    nick: isSlack ? 'me' : nick,
+    nick: isSlack || isImessage ? 'me' : nick,
     username,
     realname,
     server_password,
@@ -94,17 +153,19 @@ router.post('/', (req: Request, res: Response) => {
     sasl_account,
     sasl_password,
     connect_commands,
-    provider: isSlack ? 'slack' : 'irc',
+    provider: isSlack ? 'slack' : isImessage ? 'imessage' : 'irc',
     slack_bot_token: isSlack ? slack_bot_token : null,
     slack_app_token: isSlack ? slack_app_token : null,
+    imessage_server_url: isImessage ? imessage_server_url : null,
+    imessage_password: isImessage ? imessage_password : null,
   });
   if (!network) {
     res.status(500).json({ error: 'failed to create network' });
     return;
   }
-  // Slack conversations are discovered on connect, so there's no default channel
-  // to pre-create for a Slack network.
-  const channel = isSlack ? '' : (default_channel || '').trim();
+  // Slack/iMessage chats are discovered on connect, so there's no default
+  // channel to pre-create.
+  const channel = isSlack || isImessage ? '' : (default_channel || '').trim();
   if (channel) upsertChannel(network.id, channel, true);
   // Creating a network is an explicit "Save & connect" action, so connect now
   // regardless of `autoconnect`. The `autoconnect` flag governs only whether a
@@ -213,9 +274,25 @@ router.get('/:id/slack-file/:fileId', async (req: Request, res: Response) => {
     res.status(404).end();
     return;
   }
-  res.setHeader('Content-Type', file.mimetype);
-  res.setHeader('Cache-Control', 'private, max-age=86400');
-  res.send(Buffer.from(file.data));
+  sendMedia(req, res, file.mimetype, file.data);
+});
+
+// Same-origin proxy for an iMessage (BlueBubbles) attachment — streams the
+// auth-gated file from the BlueBubbles server to the browser, mirroring the
+// Slack file route above.
+router.get('/:id/imessage-attachment/:attachmentId', async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const conn = ircManager.getConnection(req.user!.id, id);
+  if (conn?.provider !== 'imessage') {
+    res.status(404).end();
+    return;
+  }
+  const file = await conn.downloadAttachment(String(req.params.attachmentId));
+  if (!file) {
+    res.status(404).end();
+    return;
+  }
+  sendMedia(req, res, file.mimetype, file.data);
 });
 
 // The workspace's custom emoji (name → image URL) for a Slack network, so the

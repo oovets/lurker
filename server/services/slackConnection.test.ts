@@ -343,8 +343,13 @@ describe('SlackConnection', () => {
     });
     const ev = events.find((e) => e.type === 'message');
     expect(ev?.files).toEqual([
-      { name: 'pic.png', url: `/api/networks/${net!.id}/slack-file/F1`, image: true },
-      { name: 'doc.pdf', url: `/api/networks/${net!.id}/slack-file/F2`, image: false },
+      { name: 'pic.png', url: `/api/networks/${net!.id}/slack-file/F1`, image: true, video: false },
+      {
+        name: 'doc.pdf',
+        url: `/api/networks/${net!.id}/slack-file/F2`,
+        image: false,
+        video: false,
+      },
     ]);
   });
 
